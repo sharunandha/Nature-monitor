@@ -2,6 +2,7 @@ require('dotenv').config();
 const express = require('express');
 const cors = require('cors');
 const rateLimit = require('express-rate-limit');
+const path = require('path');
 const dataRoutes = require('./routes/dataRoutes');
 const riskRoutes = require('./routes/riskRoutes');
 
@@ -64,10 +65,22 @@ app.use((err, req, res, next) => {
   });
 });
 
-// 404 handler
-app.use((req, res) => {
-  res.status(404).json({ error: 'Route not found' });
-});
+// Serve front-end build (if present) for non-API routes
+if (process.env.NODE_ENV === 'production') {
+  const buildDir = path.join(__dirname, '..', 'frontend', 'build');
+
+  app.use(express.static(buildDir));
+
+  app.get('*', (req, res) => {
+    // For any non-API route, return the React app index file
+    res.sendFile(path.join(buildDir, 'index.html'));
+  });
+} else {
+  // 404 handler for API-only / development
+  app.use((req, res) => {
+    res.status(404).json({ error: 'Route not found' });
+  });
+}
 
 const { damLocations } = require('./utils/damLocations');
 
