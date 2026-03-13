@@ -4,9 +4,9 @@ FROM node:18-alpine as builder
 WORKDIR /app
 
 # Install frontend deps and build
-COPY ../frontend/package*.json ./frontend/
+COPY frontend/package*.json ./frontend/
 RUN cd frontend && npm install
-COPY ../frontend/ ./frontend/
+COPY frontend/ ./frontend/
 RUN cd frontend && npm run build
 
 # Build runtime image for backend
@@ -15,11 +15,11 @@ FROM node:18-alpine
 WORKDIR /app
 
 # Install backend dependencies
-COPY package*.json ./
+COPY backend/package*.json ./
 RUN npm install --production
 
 # Copy backend source
-COPY . ./
+COPY backend/ ./
 
 # Copy built frontend into the backend so it can be served as static files
 COPY --from=builder /app/frontend/build ./frontend/build
