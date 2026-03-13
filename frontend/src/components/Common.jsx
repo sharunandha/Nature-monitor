@@ -42,7 +42,7 @@ export const SuccessAlert = ({ message, onClose }) => {
   );
 };
 
-export const InfoCard = ({ icon, title, value, unit, trend, color = 'blue' }) => {
+export const InfoCard = ({ icon, title, value, unit, trend, color = 'blue', className = '', style = {} }) => {
   const colors = {
     blue: 'from-blue-600 to-blue-500',
     green: 'from-green-600 to-green-500',
@@ -51,7 +51,7 @@ export const InfoCard = ({ icon, title, value, unit, trend, color = 'blue' }) =>
   };
 
   return (
-    <div className={`bg-gradient-to-br ${colors[color]} rounded-lg p-3 md:p-6 shadow-md text-white border border-opacity-20 border-white hover:shadow-lg transition`}>
+    <div className={`bg-gradient-to-br ${colors[color]} rounded-lg p-3 md:p-6 shadow-md text-white border border-opacity-20 border-white hover:shadow-lg transition ${className}`} style={style}>
       <div className="flex justify-between items-start">
         <div className="min-w-0 flex-1">
           <p className="text-xs md:text-sm font-medium opacity-90 truncate">{title}</p>
@@ -90,13 +90,13 @@ export const Badge = ({ level, size = 'md' }) => {
 };
 
 export const RiskGauge = ({ score, label = 'Risk Score' }) => {
-  const color = score >= 70 ? '#ef4444' : score >= 40 ? '#f59e0b' : '#10b981';
+  const safeScore = Number.isFinite(Number(score)) ? Number(score) : 0;
+  const color = safeScore >= 70 ? '#ef4444' : safeScore >= 40 ? '#f59e0b' : '#10b981';
 
   return (
     <div className="flex flex-col items-center">
-      <div className="relative w-20 h-20 md:w-32 md:h-32">
+      <div className="relative w-20 h-20 sm:w-24 sm:h-24 lg:w-28 lg:h-28">
         <svg viewBox="0 0 100 100" className="w-full h-full transform -rotate-90">
-          {/* Background circle */}
           <circle
             cx="50"
             cy="50"
@@ -105,7 +105,6 @@ export const RiskGauge = ({ score, label = 'Risk Score' }) => {
             stroke="#e5e7eb"
             strokeWidth="8"
           />
-          {/* Progress circle */}
           <circle
             cx="50"
             cy="50"
@@ -113,18 +112,48 @@ export const RiskGauge = ({ score, label = 'Risk Score' }) => {
             fill="none"
             stroke={color}
             strokeWidth="8"
-            strokeDasharray={`${(score / 100) * 282.74} 282.74`}
+            strokeDasharray={`${(safeScore / 100) * 282.74} 282.74`}
             strokeLinecap="round"
           />
         </svg>
         <div className="absolute inset-0 flex items-center justify-center">
           <div className="text-center">
-            <div className="text-2xl font-bold text-gray-900">{score}</div>
+            <div className="text-base sm:text-lg lg:text-xl font-bold text-gray-900">{safeScore.toFixed(0)}</div>
             <div className="text-xs text-gray-500">/ 100</div>
           </div>
         </div>
       </div>
-      <p className="text-sm text-gray-600 mt-4">{label}</p>
+      <p className="text-xs sm:text-sm text-gray-600 mt-2 sm:mt-3 text-center">{label}</p>
+    </div>
+  );
+};
+
+export const Toast = ({ message, type = 'info', onClose, duration = 5000 }) => {
+  const colors = {
+    success: 'bg-green-50 border-green-200 text-green-800',
+    error: 'bg-red-50 border-red-200 text-red-800',
+    warning: 'bg-yellow-50 border-yellow-200 text-yellow-800',
+    info: 'bg-blue-50 border-blue-200 text-blue-800',
+  };
+
+  React.useEffect(() => {
+    if (duration > 0) {
+      const timer = setTimeout(onClose, duration);
+      return () => clearTimeout(timer);
+    }
+  }, [onClose, duration]);
+
+  return (
+    <div className={`fixed top-4 right-4 z-50 max-w-sm w-full ${colors[type]} border rounded-lg p-4 shadow-lg animate-slideIn`}>
+      <div className="flex justify-between items-start">
+        <p className="text-sm font-medium">{message}</p>
+        <button
+          onClick={onClose}
+          className="ml-4 text-gray-400 hover:text-gray-600"
+        >
+          ×
+        </button>
+      </div>
     </div>
   );
 };

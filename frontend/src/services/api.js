@@ -26,9 +26,15 @@ export const dataAPI = {
 
   getRiverDischarge: (latitude, longitude) =>
     apiClient.get('/data/discharge', { params: { latitude, longitude } }),
+
+  getLiveWeather: (latitude, longitude) =>
+    apiClient.get('/data/weather', { params: { latitude, longitude } }),
   
   getAllEnvironmentalData: (latitude, longitude) =>
     apiClient.get('/data/all', { params: { latitude, longitude } }),
+
+  getAdvancedRiskAnalysis: (damId) =>
+    apiClient.get('/data/advanced-risk', { params: { damId } }),
 };
 
 // Risk APIs — all computed from live data

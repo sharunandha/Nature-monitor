@@ -268,3 +268,75 @@ export const ReservoirChart = ({ reservoirs }) => {
     </div>
   );
 };
+
+export const HistoricalComparisonChart = ({ currentData, historicalData }) => {
+  if (!currentData || !historicalData) {
+    return <div className="text-gray-500 text-center py-8">No historical data available for comparison</div>;
+  }
+
+  const chartData = {
+    labels: ['Current', 'Last Week', 'Last Month', 'Last Year'],
+    datasets: [
+      {
+        label: 'Flood Risk Score',
+        data: [
+          currentData.floodRisk?.current?.score || 0,
+          historicalData.lastWeek?.floodRisk || 0,
+          historicalData.lastMonth?.floodRisk || 0,
+          historicalData.lastYear?.floodRisk || 0,
+        ],
+        borderColor: '#ef4444',
+        backgroundColor: 'rgba(239, 68, 68, 0.1)',
+        fill: true,
+        tension: 0.4,
+      },
+      {
+        label: 'Landslide Risk Score',
+        data: [
+          currentData.landslideRisk?.current?.score || 0,
+          historicalData.lastWeek?.landslideRisk || 0,
+          historicalData.lastMonth?.landslideRisk || 0,
+          historicalData.lastYear?.landslideRisk || 0,
+        ],
+        borderColor: '#f59e0b',
+        backgroundColor: 'rgba(245, 158, 11, 0.1)',
+        fill: true,
+        tension: 0.4,
+      },
+    ],
+  };
+
+  const options = {
+    responsive: true,
+    maintainAspectRatio: true,
+    plugins: {
+      legend: {
+        labels: {
+          color: '#374151',
+          font: { size: 12 },
+        },
+      },
+      title: {
+        display: true,
+        text: 'Historical Risk Comparison',
+        color: '#6b7280',
+        font: { size: 13, weight: 'bold' },
+      },
+    },
+    scales: {
+      y: {
+        max: 100,
+        min: 0,
+        ticks: { color: '#6b7280' },
+        grid: { color: '#e5e7eb' },
+        title: { display: true, text: 'Risk Score', color: '#9ca3af' },
+      },
+      x: {
+        ticks: { color: '#6b7280' },
+        grid: { color: '#e5e7eb' },
+      },
+    },
+  };
+
+  return <Line data={chartData} options={options} />;
+};

@@ -81,6 +81,18 @@ class DataController {
     } catch (error) { next(error); }
   }
 
+  async getLiveWeatherData(req, res, next) {
+    try {
+      const { latitude, longitude } = req.query;
+      if (!latitude || !longitude) {
+        return res.status(400).json({ error: 'latitude and longitude are required' });
+      }
+
+      const data = await apiService.fetchLiveWeather(+latitude, +longitude);
+      res.json(data);
+    } catch (error) { next(error); }
+  }
+
   async getAllEnvironmentalData(req, res, next) {
     try {
       const { latitude = 20.5937, longitude = 78.9629 } = req.query;
@@ -109,6 +121,44 @@ class DataController {
           'NASA POWER Satellite',
           'USGS Earthquake Hazards Program',
         ],
+        timestamp: new Date().toISOString(),
+      });
+    } catch (error) { next(error); }
+  }
+
+  async getAdvancedRiskAnalysis(req, res, next) {
+    try {
+      const riskService = require('../services/riskAnalysisService');
+      const { damId } = req.query;
+
+      if (!damId) {
+        return res.status(400).json({ error: 'damId parameter is required' });
+      }
+
+      // Find the dam
+      const dam = damLocations.find(d => d.id === damId);
+      if (!dam) {
+        return res.status(404).json({ error: 'Dam not found' });
+      }
+
+      // Get historical data for the dam
+      const historicalData = await apiService.fetchAllDataForDam(dam);
+
+      // Calculate advanced risk
+      const advancedRisk = await riskService.calculateAdvancedRisk(dam, historicalData);
+
+      res.json({
+        ...advancedRisk,
+        dataSources: [
+          'WeatherAPI (detailed weather)',
+          'USGS Water Services (real-time water data)',
+          'Sentinel Hub (satellite imagery)',
+          'NewsAPI (disaster news)',
+          'Open-Meteo (forecast/historical)',
+          'NASA POWER (satellite precipitation)',
+          'USGS Earthquake (seismic data)'
+        ],
+        methodology: 'Multi-source weighted analysis with ML-like prediction algorithms',
         timestamp: new Date().toISOString(),
       });
     } catch (error) { next(error); }

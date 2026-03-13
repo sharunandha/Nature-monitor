@@ -5,6 +5,7 @@ const rateLimit = require('express-rate-limit');
 const path = require('path');
 const dataRoutes = require('./routes/dataRoutes');
 const riskRoutes = require('./routes/riskRoutes');
+const notificationRoutes = require('./routes/notificationRoutes');
 
 const app = express();
 const PORT = process.env.PORT || 5000;
@@ -55,6 +56,7 @@ app.get('/api/health', (req, res) => {
 // Routes
 app.use('/api/data', dataRoutes);
 app.use('/api/risk', riskRoutes);
+app.use('/api/notifications', notificationRoutes);
 
 // Error handling middleware
 app.use((err, req, res, next) => {

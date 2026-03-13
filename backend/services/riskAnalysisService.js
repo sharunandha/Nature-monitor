@@ -234,6 +234,117 @@ class RiskAnalysisService {
     if (factors.hasSeismicData) conf += 10;
     return Math.min(conf, 95);
   }
+
+  /* ================================================================
+   *  Advanced Risk Analysis — ML-like multi-source integration
+   *
+   *  Uses enhanced APIs for superior accuracy:
+   *    - WeatherAPI for detailed weather conditions
+   *    - USGS Water Services for real-time water data
+   *    - Sentinel Hub for satellite imagery analysis
+   *    - NewsAPI for disaster news monitoring
+   * ================================================================ */
+  async calculateAdvancedRisk(dam, historicalData) {
+    const apiService = require('./apiService');
+
+    try {
+      // Get advanced predictions from multiple sources
+      const advancedPred = await apiService.fetchAdvancedPredictions(dam, historicalData);
+
+      // Enhanced flood risk calculation
+      const floodRisk = this._calculateAdvancedFloodRisk(dam, historicalData, advancedPred);
+
+      // Enhanced landslide risk calculation
+      const landslideRisk = this._calculateAdvancedLandslideRisk(dam, historicalData, advancedPred);
+
+      // Overall risk score (weighted combination)
+      const overallScore = (floodRisk.score * 0.6) + (landslideRisk.score * 0.4);
+
+      return {
+        dam: dam.name,
+        location: { latitude: dam.latitude, longitude: dam.longitude },
+        overallRisk: {
+          score: Math.round(overallScore),
+          level: overallScore >= 70 ? 'HIGH' : overallScore >= 40 ? 'MEDIUM' : 'LOW'
+        },
+        floodRisk,
+        landslideRisk,
+        advancedFactors: advancedPred.factors,
+        confidence: advancedPred.confidence,
+        dataSources: advancedPred.sources,
+        timestamp: new Date().toISOString()
+      };
+    } catch (err) {
+      console.error(`[Advanced Risk] ${err.message}`);
+      // Fallback to basic calculation
+      return this.calculateCombinedRisk(dam, historicalData);
+    }
+  }
+
+  _calculateAdvancedFloodRisk(dam, historicalData, advancedPred) {
+    let score = 0;
+    const factors = [];
+
+    // Use advanced weather data
+    const weather = advancedPred.factors.weather || 50;
+    if (weather > 80) { score += 30; factors.push('Extreme weather conditions'); }
+    else if (weather > 60) { score += 20; factors.push('Severe weather conditions'); }
+    else if (weather > 40) { score += 10; factors.push('Moderate weather conditions'); }
+
+    // Use advanced discharge data
+    const discharge = advancedPred.factors.discharge || 50;
+    if (discharge > 80) { score += 25; factors.push('Critical river discharge levels'); }
+    else if (discharge > 60) { score += 15; factors.push('High river discharge levels'); }
+    else if (discharge > 40) { score += 8; factors.push('Elevated river discharge levels'); }
+
+    // Use satellite moisture data
+    const satellite = advancedPred.factors.satellite || 50;
+    if (satellite > 70) { score += 20; factors.push('High surface moisture from satellite'); }
+    else if (satellite > 50) { score += 10; factors.push('Moderate surface moisture from satellite'); }
+
+    // Seismic influence on flood risk (dam stability)
+    const seismic = advancedPred.factors.seismic || 0;
+    if (seismic > 20) { score += 15; factors.push('Recent seismic activity affecting stability'); }
+    else if (seismic > 10) { score += 8; factors.push('Moderate seismic activity'); }
+
+    const finalScore = Math.min(score, 100);
+    const level = finalScore >= 70 ? 'HIGH' : finalScore >= 40 ? 'MEDIUM' : 'LOW';
+
+    return { score: finalScore, level, factors };
+  }
+
+  _calculateAdvancedLandslideRisk(dam, historicalData, advancedPred) {
+    let score = 0;
+    const factors = [];
+
+    // Use advanced soil moisture data
+    const soil = advancedPred.factors.soil || 50;
+    if (soil > 80) { score += 30; factors.push('Extreme soil saturation'); }
+    else if (soil > 60) { score += 20; factors.push('High soil saturation'); }
+    else if (soil > 40) { score += 10; factors.push('Moderate soil saturation'); }
+
+    // Use advanced weather data
+    const weather = advancedPred.factors.weather || 50;
+    if (weather > 80) { score += 25; factors.push('Extreme weather triggering landslides'); }
+    else if (weather > 60) { score += 15; factors.push('Severe weather conditions'); }
+    else if (weather > 40) { score += 8; factors.push('Moderate weather conditions'); }
+
+    // Seismic activity (primary landslide trigger)
+    const seismic = advancedPred.factors.seismic || 0;
+    if (seismic > 30) { score += 25; factors.push('High seismic activity triggering landslides'); }
+    else if (seismic > 20) { score += 15; factors.push('Moderate seismic activity'); }
+    else if (seismic > 10) { score += 8; factors.push('Low seismic activity'); }
+
+    // Satellite vegetation stress
+    const satellite = advancedPred.factors.satellite || 50;
+    if (satellite > 70) { score += 15; factors.push('High vegetation stress from satellite'); }
+    else if (satellite > 50) { score += 8; factors.push('Moderate vegetation stress'); }
+
+    const finalScore = Math.min(score, 100);
+    const level = finalScore >= 70 ? 'HIGH' : finalScore >= 40 ? 'MEDIUM' : 'LOW';
+
+    return { score: finalScore, level, factors };
+  }
 }
 
 module.exports = new RiskAnalysisService();
