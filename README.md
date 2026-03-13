@@ -339,21 +339,32 @@ The system monitors high-risk zones:
 
 1. **Create Render account:** https://render.com
 2. **Connect GitHub repository**
-3. **Create new Web Service:**
-   - Environment: Node
-   - Build Command: `npm install`
-   - Start Command: `npm start`
-4. **Add Environment Variables** in Render dashboard
-5. **Deploy:** Click "Deploy"
+3. **Deploy with Blueprint (recommended):**
+   - In Render, choose **New +** -> **Blueprint**
+   - Select this repository (uses `render.yaml` automatically)
+4. **Set required environment variable:**
+   - `FRONTEND_URL=https://your-frontend.vercel.app`
+5. **Deploy:** Click "Apply" / "Deploy"
+
+If you prefer manual setup instead of Blueprint:
+- Root Directory: `backend`
+- Environment: Node
+- Build Command: `npm install`
+- Start Command: `npm start`
 
 ### Deploy Frontend to Vercel
 
 1. **Create Vercel account:** https://vercel.com
 2. **Connect GitHub repository**
 3. **Configure Project:**
-   - Framework: React
-   - Build Command: `npm run build`
-   - Output Directory: `build`
+   - If you keep **Root Directory = repository root**:
+     - Framework: Other
+     - Build Command: `npm run build`
+     - Output Directory: `frontend/build`
+   - If you set **Root Directory = frontend** (recommended):
+     - Framework: React
+     - Build Command: `npm run build`
+     - Output Directory: `build`
 4. **Add Environment Variables:**
    ```
    REACT_APP_API_URL=https://your-backend-url.com/api
