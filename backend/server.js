@@ -10,17 +10,34 @@ const notificationRoutes = require('./routes/notificationRoutes');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
-// Middleware — allow localhost (dev) + Railway/production frontend
+function normalizeOrigin(url) {
+  if (!url) return '';
+  return url.replace(/\/$/, '');
+}
+
+function isAllowedDeploymentHost(origin) {
+  try {
+    const { hostname } = new URL(origin);
+    return hostname.endsWith('.vercel.app') || hostname.endsWith('.up.railway.app');
+  } catch {
+    return false;
+  }
+}
+
+// Middleware — allow localhost (dev) + deployed frontends (Vercel/Railway/custom)
 app.use(cors({
   origin: function (origin, callback) {
+    const configuredFrontend = normalizeOrigin(process.env.FRONTEND_URL);
+    const requestOrigin = normalizeOrigin(origin);
+
     // Allow requests with no origin (mobile apps, curl, etc.)
     if (!origin) return callback(null, true);
     // Localhost for development
     if (/^https?:\/\/localhost(:\d+)?$/.test(origin)) return callback(null, true);
-    // Railway deployed frontend
-    if (/\.up\.railway\.app$/.test(origin)) return callback(null, true);
-    // Custom domain (set FRONTEND_URL env var if using a custom domain)
-    if (process.env.FRONTEND_URL && origin === process.env.FRONTEND_URL) return callback(null, true);
+    // Vercel/Railway deployed frontend domains
+    if (isAllowedDeploymentHost(origin)) return callback(null, true);
+    // Custom domain (set FRONTEND_URL env var)
+    if (configuredFrontend && requestOrigin === configuredFrontend) return callback(null, true);
     callback(new Error('Not allowed by CORS'));
   },
   credentials: true
