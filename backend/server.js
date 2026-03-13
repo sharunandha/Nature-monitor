@@ -66,9 +66,10 @@ app.use((err, req, res, next) => {
 });
 
 // Serve front-end build (if present) for non-API routes
-if (process.env.NODE_ENV === 'production') {
-  const buildDir = path.join(__dirname, '..', 'frontend', 'build');
+const buildDir = path.join(__dirname, '..', 'frontend', 'build');
+const hasFrontendBuild = require('fs').existsSync(path.join(buildDir, 'index.html'));
 
+if (hasFrontendBuild) {
   app.use(express.static(buildDir));
 
   app.get('*', (req, res) => {

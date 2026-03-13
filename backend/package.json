@@ -6,6 +6,7 @@
   "scripts": {
     "start": "node server.js",
     "build:frontend": "cd ../frontend && npm install && npm run build",
+    "postinstall": "npm run build:frontend",
     "dev": "nodemon server.js",
     "start-mock": "node mock-server.js"
   },
