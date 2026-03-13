@@ -4,11 +4,10 @@
   "description": "India Flood and Landslide Early Warning System - Backend",
   "main": "server.js",
   "scripts": {
-    "start": "npm run build:frontend && node server.js",
+    "start": "node server.js",
     "build:frontend": "cd ../frontend && npm install && npm run build",
     "dev": "nodemon server.js",
-    "start-mock": "node mock-server.js",
-    "postinstall": "npm run build:frontend"
+    "start-mock": "node mock-server.js"
   },
   "keywords": [
     "flood",
