@@ -5,7 +5,7 @@ import { MapComponent } from './components/Map';
 import { RiskDetailsPanel } from './components/RiskPanel';
 import { RainfallChart, RiskTrendChart, HistoricalComparisonChart } from './components/Charts';
 import { LoadingSpinner, ErrorAlert, Toast } from './components/Common';
-import { dataAPI, riskAPI } from './services/api';
+import apiClient, { dataAPI, riskAPI } from './services/api';
 import { exportRiskData, exportRainfallData, exportToPDF } from './utils/helpers';
 
 function App() {
@@ -143,17 +143,11 @@ function App() {
           <p>Best regards,<br>Flood & Landslide Warning System</p>
         `;
 
-        await fetch('http://localhost:5000/api/notifications/email', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            to: notificationSettings.email,
-            subject: 'Notification Settings Confirmed - Flood Warning System',
-            message: testMessage,
-            settings: notificationSettings
-          })
+        await apiClient.post('/notifications/email', {
+          to: notificationSettings.email,
+          subject: 'Notification Settings Confirmed - Flood Warning System',
+          message: testMessage,
+          settings: notificationSettings,
         });
       }
 
