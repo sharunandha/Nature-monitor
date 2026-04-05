@@ -547,15 +547,9 @@ export const LiveWeatherMonitor = ({ selectedDam, dams }) => {
   const [weatherData, setWeatherData] = React.useState(null);
   const [weatherLoading, setWeatherLoading] = React.useState(false);
   const [weatherError, setWeatherError] = React.useState(null);
-  const [weatherTimestamp, setWeatherTimestamp] = React.useState(null);
 
   React.useEffect(() => {
     let mounted = true;
-
-    // Reset stale values whenever selected dam changes.
-    setWeatherData(null);
-    setWeatherError(null);
-    setWeatherTimestamp(null);
 
     const fetchWeather = async () => {
       if (!dam) return;
@@ -567,22 +561,12 @@ export const LiveWeatherMonitor = ({ selectedDam, dams }) => {
         const response = await dataAPI.getLiveWeather(dam.latitude, dam.longitude);
         const current = response?.data?.current;
 
-        if (mounted) {
-          if (current) {
-            setWeatherData(current);
-            setWeatherError(null);
-            setWeatherTimestamp(response?.data?.timestamp || new Date().toISOString());
-          } else {
-            setWeatherData(null);
-            setWeatherError(response?.data?.error || 'Unable to fetch live weather right now.');
-            setWeatherTimestamp(null);
-          }
+        if (mounted && current) {
+          setWeatherData(current);
         }
       } catch (error) {
         if (mounted) {
-          setWeatherData(null);
           setWeatherError('Unable to fetch live weather right now.');
-          setWeatherTimestamp(null);
         }
       } finally {
         if (mounted) {
@@ -600,7 +584,7 @@ export const LiveWeatherMonitor = ({ selectedDam, dams }) => {
       mounted = false;
       clearInterval(interval);
     };
-  }, [dam?.id, dam?.latitude, dam?.longitude]);
+  }, [dam]);
 
   if (!dam) {
     return (
@@ -685,9 +669,7 @@ export const LiveWeatherMonitor = ({ selectedDam, dams }) => {
 
       <div className="mt-4 pt-3 border-t border-cyan-200">
         <div className="flex items-center justify-between text-xs text-gray-600">
-          <span>
-            Last updated: {weatherTimestamp ? new Date(weatherTimestamp).toLocaleTimeString() : '--'}
-          </span>
+          <span>Last updated: {new Date().toLocaleTimeString()}</span>
           <span className="flex items-center gap-1">
             <span className="w-2 h-2 bg-green-500 rounded-full animate-pulse"></span>
             Live Data

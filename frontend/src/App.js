@@ -8,48 +8,6 @@ import { LoadingSpinner, ErrorAlert, Toast } from './components/Common';
 import apiClient, { dataAPI, riskAPI } from './services/api';
 import { exportRiskData, exportRainfallData, exportToPDF } from './utils/helpers';
 
-const buildAlertsFromRisks = (risks = []) => {
-  const priority = { HIGH: 3, MEDIUM: 2, LOW: 1 };
-
-  return risks.flatMap((risk) => {
-    const damName = risk.dam?.name || 'Unknown Dam';
-    const damState = risk.dam?.state || 'Unknown State';
-    const alerts = [];
-
-    if (risk.floodRisk === 'HIGH' || risk.floodRisk === 'MEDIUM') {
-      alerts.push({
-        id: `flood-${risk.dam?.id || damName}-${risk.floodRisk}`,
-        type: 'FLOOD',
-        severity: risk.floodRisk,
-        location: damName,
-        score: risk.floodScore || 0,
-        title: `${risk.floodRisk} Flood Risk`,
-        description: `${damName}, ${damState} is currently at ${risk.floodRisk.toLowerCase()} flood risk with a score of ${risk.floodScore || 0}.`,
-        timestamp: risk.timestamp || new Date().toISOString(),
-      });
-    }
-
-    if (risk.landslideRisk === 'HIGH' || risk.landslideRisk === 'MEDIUM') {
-      alerts.push({
-        id: `landslide-${risk.dam?.id || damName}-${risk.landslideRisk}`,
-        type: 'LANDSLIDE',
-        severity: risk.landslideRisk,
-        location: damName,
-        score: risk.landslideScore || 0,
-        title: `${risk.landslideRisk} Landslide Risk`,
-        description: `${damName}, ${damState} is currently at ${risk.landslideRisk.toLowerCase()} landslide risk with a score of ${risk.landslideScore || 0}.`,
-        timestamp: risk.timestamp || new Date().toISOString(),
-      });
-    }
-
-    return alerts;
-  }).sort((a, b) => {
-    const severityDelta = (priority[b.severity] || 0) - (priority[a.severity] || 0);
-    if (severityDelta !== 0) return severityDelta;
-    return (b.score || 0) - (a.score || 0);
-  });
-};
-
 function App() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState(null);
@@ -86,31 +44,15 @@ function App() {
       setLoading(true);
       setError(null);
 
-      const damsRes = await dataAPI.getDamLocations();
+      const [damsRes, risksRes, alertsRes] = await Promise.all([
+        dataAPI.getDamLocations(),
+        riskAPI.getAllRisks(),
+        riskAPI.getAlerts(),
+      ]);
+
       setDams(damsRes.data.dams || []);
-
-      let risks = [];
-      let lastError = null;
-
-      for (let attempt = 0; attempt < 3; attempt++) {
-        try {
-          const risksRes = await riskAPI.getAllRisks();
-          risks = risksRes.data.risks || [];
-          if (risks.length > 0) break;
-        } catch (err) {
-          lastError = err;
-          if (attempt === 2) break;
-        }
-
-        await new Promise(resolve => setTimeout(resolve, 4000));
-      }
-
-      if (risks.length === 0 && lastError) {
-        throw lastError;
-      }
-
-      setRisks(risks);
-      setAlerts(buildAlertsFromRisks(risks));
+      setRisks(risksRes.data.risks || []);
+      setAlerts(alertsRes.data.alerts || []);
       setLastUpdated(new Date().toISOString());
 
       // Select first dam by default
