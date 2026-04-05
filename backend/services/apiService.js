@@ -20,6 +20,7 @@ class APIService {
   constructor() {
     this.openMeteoBase = 'https://api.open-meteo.com/v1';
     this.openMeteoFlood = 'https://flood-api.open-meteo.com/v1/flood';
+    this.metNoBase = 'https://api.met.no/weatherapi/locationforecast/2.0/compact';
     this.nasaPowerBase = 'https://power.larc.nasa.gov/api/temporal/daily/point';
     this.usgsBase = 'https://earthquake.usgs.gov/fdsnws/event/1/query';
     this.weatherApiBase = 'https://api.weatherapi.com/v1';
@@ -78,6 +79,56 @@ class APIService {
       }
     }
     throw lastErr;
+  }
+
+  async _fetchMetNoCurrentWeather(latitude, longitude) {
+    const response = await this._getWithRetry(this.metNoBase, {
+      timeout: this.timeout,
+      headers: {
+        // met.no requires a descriptive User-Agent.
+        'User-Agent': 'NatureMonitor/1.0 github.com/sharunandha/Nature-monitor',
+      },
+      params: { lat: latitude, lon: longitude },
+    }, 'met.no Live Weather');
+
+    const series = response?.data?.properties?.timeseries || [];
+    const latest = series[0]?.data || {};
+    const details = latest.instant?.details || {};
+    const next1h = latest.next_1_hours || {};
+    const summary = next1h.summary?.symbol_code || 'unknown';
+
+    const symbolMap = {
+      clearsky_day: 'Clear',
+      clearsky_night: 'Clear',
+      fair_day: 'Partly Cloudy',
+      fair_night: 'Partly Cloudy',
+      partlycloudy_day: 'Partly Cloudy',
+      cloudy: 'Overcast',
+      lightrain: 'Light Rain',
+      rain: 'Rain',
+      heavyrain: 'Heavy Rain',
+      fog: 'Fog',
+      snow: 'Snow',
+      lightsnow: 'Light Snow',
+      sleet: 'Sleet',
+      thunderstorm: 'Thunderstorm',
+    };
+
+    return {
+      location: { latitude, longitude },
+      current: {
+        temperature: details.air_temperature ?? null,
+        humidity: details.relative_humidity ?? null,
+        feelsLike: details.air_temperature ?? null,
+        pressure: details.air_pressure_at_sea_level ?? null,
+        windSpeed: details.wind_speed ?? null,
+        rainfall: next1h.details?.precipitation_amount ?? 0,
+        weatherCode: null,
+        condition: symbolMap[summary] || summary.replace(/_/g, ' ') || 'Unknown',
+      },
+      source: 'met.no',
+      timestamp: new Date().toISOString(),
+    };
   }
 
   /* ================================================================
@@ -192,13 +243,24 @@ class APIService {
     } catch (err) {
       const msg = this._errorSummary(err);
       console.error(`[Live Weather] ${msg}`);
-      return {
-        error: msg,
-        location: { latitude, longitude },
-        current: null,
-        source: 'Unavailable',
-        timestamp: new Date().toISOString(),
-      };
+
+      // Fallback provider: met.no (no API key required)
+      try {
+        const fallback = await this._fetchMetNoCurrentWeather(latitude, longitude);
+        fallback.fallbackFrom = 'Open-Meteo';
+        cache.set(ck, fallback, 10 * 60 * 1000);
+        return fallback;
+      } catch (fallbackErr) {
+        const fallbackMsg = this._errorSummary(fallbackErr);
+        console.error(`[met.no Live Weather] ${fallbackMsg}`);
+        return {
+          error: `${msg} | fallback_failed=${fallbackMsg}`,
+          location: { latitude, longitude },
+          current: null,
+          source: 'Unavailable',
+          timestamp: new Date().toISOString(),
+        };
+      }
     }
   }
 
