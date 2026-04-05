@@ -131,6 +131,72 @@ class APIService {
     };
   }
 
+  async _fetchMetNoRainfallForecast(latitude, longitude, days = 7) {
+    const response = await this._getWithRetry(this.metNoBase, {
+      timeout: this.timeout,
+      headers: {
+        'User-Agent': 'NatureMonitor/1.0 github.com/sharunandha/Nature-monitor',
+      },
+      params: { lat: latitude, lon: longitude },
+    }, 'met.no Rain Forecast');
+
+    const series = response?.data?.properties?.timeseries || [];
+    const dailyMap = new Map();
+
+    for (const point of series) {
+      const iso = point?.time;
+      if (!iso) continue;
+      const date = iso.slice(0, 10);
+      const amount = Number(point?.data?.next_1_hours?.details?.precipitation_amount ?? 0);
+      if (!dailyMap.has(date)) {
+        dailyMap.set(date, { precip: 0, tempMax: -Infinity, tempMin: Infinity, windMax: 0 });
+      }
+
+      const d = dailyMap.get(date);
+      d.precip += Number.isFinite(amount) ? amount : 0;
+
+      const details = point?.data?.instant?.details || {};
+      const t = Number(details.air_temperature);
+      const w = Number(details.wind_speed);
+      if (Number.isFinite(t)) {
+        d.tempMax = Math.max(d.tempMax, t);
+        d.tempMin = Math.min(d.tempMin, t);
+      }
+      if (Number.isFinite(w)) {
+        d.windMax = Math.max(d.windMax, w);
+      }
+    }
+
+    const selectedDays = Array.from(dailyMap.keys()).sort().slice(0, days);
+    const daily = {
+      time: selectedDays,
+      precipitation_sum: selectedDays.map(day => +dailyMap.get(day).precip.toFixed(2)),
+      rain_sum: selectedDays.map(day => +dailyMap.get(day).precip.toFixed(2)),
+      precipitation_probability_max: selectedDays.map(() => null),
+      temperature_2m_max: selectedDays.map(day => {
+        const v = dailyMap.get(day).tempMax;
+        return Number.isFinite(v) ? +v.toFixed(1) : null;
+      }),
+      temperature_2m_min: selectedDays.map(day => {
+        const v = dailyMap.get(day).tempMin;
+        return Number.isFinite(v) ? +v.toFixed(1) : null;
+      }),
+      windspeed_10m_max: selectedDays.map(day => {
+        const v = dailyMap.get(day).windMax;
+        return Number.isFinite(v) ? +v.toFixed(1) : null;
+      }),
+    };
+
+    return {
+      location: { latitude, longitude },
+      daily,
+      hourly: null,
+      source: 'met.no Forecast',
+      timestamp: new Date().toISOString(),
+      fallbackFrom: 'Open-Meteo',
+    };
+  }
+
   /* ================================================================
    *  1. Weather Forecast (Open-Meteo)
    * ================================================================ */
@@ -161,7 +227,22 @@ class APIService {
     } catch (err) {
       const msg = this._errorSummary(err);
       console.error(`[Open-Meteo Forecast] ${msg}`);
-      return { error: msg, location: { latitude, longitude }, daily: null, hourly: null };
+
+      // Fallback provider for rainfall forecast (no API key required)
+      try {
+        const fallback = await this._fetchMetNoRainfallForecast(latitude, longitude, 7);
+        cache.set(ck, fallback);
+        return fallback;
+      } catch (fallbackErr) {
+        const fallbackMsg = this._errorSummary(fallbackErr);
+        console.error(`[met.no Rain Forecast] ${fallbackMsg}`);
+        return {
+          error: `${msg} | fallback_failed=${fallbackMsg}`,
+          location: { latitude, longitude },
+          daily: null,
+          hourly: null,
+        };
+      }
     }
   }
 

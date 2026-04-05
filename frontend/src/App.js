@@ -265,9 +265,12 @@ function App() {
 
   const highRiskCount = filteredRisks.filter(r => r.floodRisk === 'HIGH' || r.landslideRisk === 'HIGH').length;
 
-  const avgRainfall = rainfallData?.forecast?.daily?.precipitation_sum
-    ? +(rainfallData.forecast.daily.precipitation_sum.reduce((s, v) => s + (v || 0), 0) / rainfallData.forecast.daily.precipitation_sum.length).toFixed(1)
-    : 0;
+  const avgRainfall = rainfallData?.forecast?.daily?.precipitation_sum?.length
+    ? +(
+      rainfallData.forecast.daily.precipitation_sum.reduce((s, v) => s + (v || 0), 0)
+      / rainfallData.forecast.daily.precipitation_sum.length
+    ).toFixed(1)
+    : +(rainfallData?.nasa?.stats?.avgPrecip || 0).toFixed(1);
   const earthquakesCount = selectedRiskData?.environmentalData?.earthquakes?.recentCount || 0;
 
   const historicalRiskData = selectedRiskData ? {
