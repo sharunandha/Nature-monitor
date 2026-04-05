@@ -10,6 +10,12 @@ const notificationRoutes = require('./routes/notificationRoutes');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Render and other PaaS terminate TLS at a proxy and forward client IP via X-Forwarded-For.
+// Without trust proxy, express-rate-limit can misidentify clients and emit ERR_ERL_UNEXPECTED_X_FORWARDED_FOR.
+if (process.env.NODE_ENV === 'production') {
+  app.set('trust proxy', 1);
+}
+
 function normalizeOrigin(url) {
   if (!url) return '';
   return url.replace(/\/$/, '');
@@ -49,6 +55,8 @@ app.use(express.json());
 const limiter = rateLimit({
   windowMs: (process.env.RATE_LIMIT_WINDOW || 15) * 60 * 1000,
   max: process.env.RATE_LIMIT_MAX_REQUESTS || 500,
+  standardHeaders: true,
+  legacyHeaders: false,
   message: 'Too many requests from this IP, please try again later.'
 });
 

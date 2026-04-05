@@ -54,6 +54,32 @@ class APIService {
     return +(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))).toFixed(1);
   }
 
+  _errorSummary(err) {
+    const status = err?.response?.status;
+    const code = err?.code;
+    const msg = err?.message;
+    const upstream = err?.response?.data?.reason || err?.response?.data?.error;
+    return [status ? `status=${status}` : null, code ? `code=${code}` : null, msg || null, upstream || null]
+      .filter(Boolean)
+      .join(' | ');
+  }
+
+  async _getWithRetry(url, options, label, retries = 2) {
+    let lastErr;
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await axios.get(url, options);
+      } catch (err) {
+        lastErr = err;
+        const status = err?.response?.status;
+        const retriable = status === 429 || (status >= 500 && status < 600) || err?.code === 'ECONNABORTED';
+        if (!retriable || attempt === retries) break;
+        await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+      }
+    }
+    throw lastErr;
+  }
+
   /* ================================================================
    *  1. Weather Forecast (Open-Meteo)
    * ================================================================ */
@@ -62,7 +88,7 @@ class APIService {
     const c = cache.get(ck); if (c) return c;
 
     try {
-      const res = await axios.get(`${this.openMeteoBase}/forecast`, {
+      const res = await this._getWithRetry(`${this.openMeteoBase}/forecast`, {
         timeout: this.timeout,
         params: {
           latitude, longitude,
@@ -71,7 +97,7 @@ class APIService {
           forecast_days: 7,
           timezone: 'Asia/Kolkata',
         },
-      });
+      }, 'Open-Meteo Forecast');
       const data = {
         location: { latitude, longitude },
         daily: res.data.daily,
@@ -82,8 +108,9 @@ class APIService {
       cache.set(ck, data);
       return data;
     } catch (err) {
-      console.error(`[Open-Meteo Forecast] ${err.message}`);
-      return { error: err.message, location: { latitude, longitude }, daily: null, hourly: null };
+      const msg = this._errorSummary(err);
+      console.error(`[Open-Meteo Forecast] ${msg}`);
+      return { error: msg, location: { latitude, longitude }, daily: null, hourly: null };
     }
   }
 
@@ -95,7 +122,7 @@ class APIService {
     const c = cache.get(ck); if (c) return c;
 
     try {
-      const openMeteoResponse = await axios.get(`${this.openMeteoBase}/forecast`, {
+      const openMeteoResponse = await this._getWithRetry(`${this.openMeteoBase}/forecast`, {
         timeout: this.timeout,
         params: {
           latitude,
@@ -103,7 +130,7 @@ class APIService {
           current: 'temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,pressure_msl,windspeed_10m,weathercode',
           timezone: 'Asia/Kolkata',
         },
-      });
+      }, 'Live Weather');
 
       const current = openMeteoResponse.data?.current || {};
       const weatherCode = current.weathercode;
@@ -163,9 +190,10 @@ class APIService {
       cache.set(ck, data, 10 * 60 * 1000);
       return data;
     } catch (err) {
-      console.error(`[Live Weather] ${err.message}`);
+      const msg = this._errorSummary(err);
+      console.error(`[Live Weather] ${msg}`);
       return {
-        error: err.message,
+        error: msg,
         location: { latitude, longitude },
         current: null,
         source: 'Unavailable',
@@ -185,7 +213,7 @@ class APIService {
       const endDate = this._dateFmt(this._daysAgo(1));
       const startDate = this._dateFmt(this._daysAgo(days));
 
-      const res = await axios.get(`${this.openMeteoBase}/forecast`, {
+      const res = await this._getWithRetry(`${this.openMeteoBase}/forecast`, {
         timeout: this.timeout,
         params: {
           latitude, longitude,
@@ -194,7 +222,7 @@ class APIService {
           end_date: endDate,
           timezone: 'Asia/Kolkata',
         },
-      });
+      }, 'Open-Meteo History');
 
       const data = {
         location: { latitude, longitude },
@@ -206,8 +234,9 @@ class APIService {
       cache.set(ck, data);
       return data;
     } catch (err) {
-      console.error(`[Open-Meteo History] ${err.message}`);
-      return { error: err.message, location: { latitude, longitude }, daily: null };
+      const msg = this._errorSummary(err);
+      console.error(`[Open-Meteo History] ${msg}`);
+      return { error: msg, location: { latitude, longitude }, daily: null };
     }
   }
 
@@ -220,7 +249,7 @@ class APIService {
 
     try {
       // Use correct Open-Meteo variable names for soil moisture depths
-      const res = await axios.get(`${this.openMeteoBase}/forecast`, {
+      const res = await this._getWithRetry(`${this.openMeteoBase}/forecast`, {
         timeout: this.timeout,
         params: {
           latitude, longitude,
@@ -229,7 +258,7 @@ class APIService {
           forecast_days: 1,
           timezone: 'Asia/Kolkata',
         },
-      });
+      }, 'Open-Meteo Soil');
 
       const h = res.data.hourly;
 
@@ -281,8 +310,9 @@ class APIService {
       cache.set(ck, data);
       return data;
     } catch (err) {
-      console.error(`[Open-Meteo Soil] ${err.message}`);
-      return { error: err.message, location: { latitude, longitude }, current: null, avg24h: null };
+      const msg = this._errorSummary(err);
+      console.error(`[Open-Meteo Soil] ${msg}`);
+      return { error: msg, location: { latitude, longitude }, current: null, avg24h: null };
     }
   }
 
@@ -294,14 +324,14 @@ class APIService {
     const c = cache.get(ck); if (c) return c;
 
     try {
-      const res = await axios.get(this.openMeteoFlood, {
+      const res = await this._getWithRetry(this.openMeteoFlood, {
         timeout: this.timeout,
         params: {
           latitude, longitude,
           daily: 'river_discharge',
           forecast_days: 7,
         },
-      });
+      }, 'GloFAS Flood');
 
       const daily = res.data.daily || {};
       const vals = (daily.river_discharge || []).filter(v => v !== null);
@@ -319,8 +349,9 @@ class APIService {
       cache.set(ck, data);
       return data;
     } catch (err) {
-      console.error(`[GloFAS Flood] ${err.message}`);
-      return { error: err.message, location: { latitude, longitude }, daily: null, stats: { maxDischarge: 0, avgDischarge: 0, latestDischarge: 0 } };
+      const msg = this._errorSummary(err);
+      console.error(`[GloFAS Flood] ${msg}`);
+      return { error: msg, location: { latitude, longitude }, daily: null, stats: { maxDischarge: 0, avgDischarge: 0, latestDischarge: 0 } };
     }
   }
 
