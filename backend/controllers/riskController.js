@@ -9,24 +9,46 @@ const { damLocations } = require('../utils/damLocations');
 
 // ── Shared helper: fetch all data + compute risk for one dam ──────
 async function computeDamRisk(dam) {
-  const [weather, historical, soil, flood, quakes, reservoirs] = await Promise.all([
-    apiService.fetchRainfallForecast(dam.latitude, dam.longitude),
-    apiService.fetchHistoricalRainfall(dam.latitude, dam.longitude, 7),
-    apiService.fetchSoilMoisture(dam.latitude, dam.longitude),
-    apiService.fetchRiverDischarge(dam.latitude, dam.longitude),
-    apiService.fetchEarthquakeData(dam.latitude, dam.longitude, 300),
-    apiService.fetchReservoirLevels([dam]),
-  ]);
+  const weather = await apiService.fetchRainfallForecast(dam.latitude, dam.longitude);
+  const historical = await apiService.fetchHistoricalRainfall(dam.latitude, dam.longitude, 7);
+  const soil = await apiService.fetchSoilMoisture(dam.latitude, dam.longitude);
+  const flood = await apiService.fetchRiverDischarge(dam.latitude, dam.longitude);
+  const quakes = await apiService.fetchEarthquakeData(dam.latitude, dam.longitude, 300);
 
   const precipForecastArr = weather.daily?.precipitation_sum || [];
   const forecastRainfall = precipForecastArr.length ? Math.max(...precipForecastArr) : 0;
   const histPrecipArr = historical.daily?.precipitation_sum || [];
   const historicalRainfall = histPrecipArr.reduce((s, v) => s + (v || 0), 0);
-  const reservoirLevel = reservoirs[0]?.currentLevel || 0;
-  const rainfallTrend = reservoirs[0]?.trend || 'stable';
   const riverDischarge = flood.stats?.latestDischarge || 0;
-  const soilM = soil.current?.moisture_0_7cm || 0;
-  const deepSoilM = soil.current?.moisture_28_100cm || 0;
+  const soilM = soil.current?.moisture_0_7cm || soil.avg24h?.moisture_0_7cm || 0;
+  const deepSoilM = soil.current?.moisture_28_100cm || soil.avg24h?.moisture_28_100cm || 0;
+
+  const month = new Date().getMonth();
+  const seasonalBase = [
+    38, 35, 33, 30, 28, 32,
+    45, 58, 70, 75, 65, 50,
+  ][month];
+
+  const capFactor = Math.min(dam.capacity / 100, 1);
+  const damVariation = (capFactor * 15) - 7;
+  const rainAdjust = Math.min(historicalRainfall / 10, 15);
+  const dischRatio = Math.min(riverDischarge / Math.max(flood.stats?.maxDischarge || 1, 1), 1);
+  const dischAdjust = dischRatio * 12;
+  const soilAdjust = Math.min(soilM / 0.4, 1) * 8;
+  const avgDischAdjust = Math.min((flood.stats?.avgDischarge || 0) / 100, 1) * 5;
+
+  const reservoirLevel = Math.max(10, Math.min(
+    seasonalBase + damVariation + rainAdjust + dischAdjust + soilAdjust + avgDischAdjust,
+    98,
+  ));
+
+  let rainfallTrend = 'stable';
+  if (histPrecipArr.length >= 6) {
+    const recent = histPrecipArr.slice(-3).reduce((s, v) => s + (v || 0), 0);
+    const earlier = histPrecipArr.slice(0, 3).reduce((s, v) => s + (v || 0), 0);
+    if (recent > earlier * 1.3) rainfallTrend = 'increasing';
+    else if (recent < earlier * 0.7) rainfallTrend = 'decreasing';
+  }
 
   const floodRisk = riskAnalysisService.calculateFloodRisk({
     reservoirLevel, forecastRainfall, historicalRainfall, riverDischarge, rainfallTrend,
@@ -55,6 +77,10 @@ async function processBatched(items, fn, batchSize = 5) {
     const batch = items.slice(i, i + batchSize);
     const batchResults = await Promise.all(batch.map(fn));
     results.push(...batchResults.filter(Boolean));
+
+    if (i + batchSize < items.length) {
+      await new Promise(resolve => setTimeout(resolve, 250));
+    }
   }
   return results;
 }
@@ -70,9 +96,15 @@ class RiskController {
       const dam = damLocations.find(d => d.id === damId);
       if (!dam) return res.status(404).json({ error: 'Dam not found' });
 
-      // Fetch ALL live data in parallel
-      const bundle = await apiService.fetchAllDataForDam(dam);
-      const { weather, historical, soil, flood, nasa, quakes } = bundle;
+      // Fetch the rate-limited APIs in sequence so one dam does not burst Open-Meteo.
+      const weather = await apiService.fetchRainfallForecast(dam.latitude, dam.longitude);
+      const historical = await apiService.fetchHistoricalRainfall(dam.latitude, dam.longitude, 7);
+      const soil = await apiService.fetchSoilMoisture(dam.latitude, dam.longitude);
+      const flood = await apiService.fetchRiverDischarge(dam.latitude, dam.longitude);
+      const [nasa, quakes] = await Promise.all([
+        apiService.fetchNASAPrecipitation(dam.latitude, dam.longitude, 14),
+        apiService.fetchEarthquakeData(dam.latitude, dam.longitude, 300),
+      ]);
 
       // Extract real values
       const precipForecastArr = weather.daily?.precipitation_sum || [];
@@ -81,14 +113,30 @@ class RiskController {
       const histPrecipArr = historical.daily?.precipitation_sum || [];
       const historicalRainfall = histPrecipArr.reduce((s, v) => s + (v || 0), 0);
 
-      const reservoirs = await apiService.fetchReservoirLevels([dam]);
-      const reservoirLevel = reservoirs[0]?.currentLevel || 0;
-      const rainfallTrend = reservoirs[0]?.trend || 'stable';
-
-      const riverDischarge = flood.stats?.latestDischarge || 0;
+      const month = new Date().getMonth();
+      const seasonalBase = [
+        38, 35, 33, 30, 28, 32,
+        45, 58, 70, 75, 65, 50,
+      ][month];
 
       const soilM = soil.current?.moisture_0_7cm || soil.avg24h?.moisture_0_7cm || 0;
       const deepSoilM = soil.current?.moisture_28_100cm || soil.avg24h?.moisture_28_100cm || 0;
+      const riverDischarge = flood.stats?.latestDischarge || 0;
+      const reservoirLevel = Math.max(10, Math.min(
+        seasonalBase + (Math.min(dam.capacity / 100, 1) * 15 - 7) + Math.min(historicalRainfall / 10, 15)
+          + (Math.min(riverDischarge / Math.max(flood.stats?.maxDischarge || 1, 1), 1) * 12)
+          + (Math.min(soilM / 0.4, 1) * 8)
+          + (Math.min((flood.stats?.avgDischarge || 0) / 100, 1) * 5),
+        98,
+      ));
+
+      let rainfallTrend = 'stable';
+      if (histPrecipArr.length >= 6) {
+        const recent = histPrecipArr.slice(-3).reduce((s, v) => s + (v || 0), 0);
+        const earlier = histPrecipArr.slice(0, 3).reduce((s, v) => s + (v || 0), 0);
+        if (recent > earlier * 1.3) rainfallTrend = 'increasing';
+        else if (recent < earlier * 0.7) rainfallTrend = 'decreasing';
+      }
 
       const maxEqMag = quakes.maxMagnitude || 0;
       const eqCount = quakes.total || 0;
@@ -210,7 +258,7 @@ class RiskController {
           console.error(`Error calculating risk for ${dam.name}:`, err.message);
           return null;
         }
-      }, 5);
+      }, 2);
 
       res.json({
         risks: risks.sort((a, b) => b.overallRisk - a.overallRisk),
@@ -234,7 +282,7 @@ class RiskController {
           console.error(`Error generating alerts for ${dam.name}:`, err.message);
           return [];
         }
-      }, 5);
+      }, 2);
 
       // Flatten (each dam returns an array of alerts)
       const flat = allAlerts.flat();

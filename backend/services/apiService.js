@@ -54,6 +54,23 @@ class APIService {
     return +(R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a))).toFixed(1);
   }
 
+  async _fetchWithRetry(fetchFn, label, retries = 2, delayMs = 1000) {
+    for (let attempt = 0; attempt <= retries; attempt++) {
+      try {
+        return await fetchFn();
+      } catch (err) {
+        const status = err.response?.status;
+        const canRetry = (status === 429 || (status >= 500 && status < 600)) && attempt < retries;
+        if (!canRetry) throw err;
+
+        const waitMs = delayMs * (attempt + 1);
+        console.warn(`[${label}] retrying after ${status} (${attempt + 1}/${retries}) in ${waitMs}ms`);
+        await new Promise(resolve => setTimeout(resolve, waitMs));
+      }
+    }
+    throw new Error(`${label} request failed after retries`);
+  }
+
   /* ================================================================
    *  1. Weather Forecast (Open-Meteo)
    * ================================================================ */
@@ -62,7 +79,7 @@ class APIService {
     const c = cache.get(ck); if (c) return c;
 
     try {
-      const res = await axios.get(`${this.openMeteoBase}/forecast`, {
+      const res = await this._fetchWithRetry(() => axios.get(`${this.openMeteoBase}/forecast`, {
         timeout: this.timeout,
         params: {
           latitude, longitude,
@@ -71,7 +88,7 @@ class APIService {
           forecast_days: 7,
           timezone: 'Asia/Kolkata',
         },
-      });
+      }), 'Open-Meteo Forecast');
       const data = {
         location: { latitude, longitude },
         daily: res.data.daily,
@@ -95,7 +112,7 @@ class APIService {
     const c = cache.get(ck); if (c) return c;
 
     try {
-      const openMeteoResponse = await axios.get(`${this.openMeteoBase}/forecast`, {
+      const openMeteoResponse = await this._fetchWithRetry(() => axios.get(`${this.openMeteoBase}/forecast`, {
         timeout: this.timeout,
         params: {
           latitude,
@@ -103,7 +120,7 @@ class APIService {
           current: 'temperature_2m,relative_humidity_2m,apparent_temperature,precipitation,pressure_msl,windspeed_10m,weathercode',
           timezone: 'Asia/Kolkata',
         },
-      });
+      }), 'Live Weather');
 
       const current = openMeteoResponse.data?.current || {};
       const weatherCode = current.weathercode;
@@ -185,7 +202,7 @@ class APIService {
       const endDate = this._dateFmt(this._daysAgo(1));
       const startDate = this._dateFmt(this._daysAgo(days));
 
-      const res = await axios.get(`${this.openMeteoBase}/forecast`, {
+      const res = await this._fetchWithRetry(() => axios.get(`${this.openMeteoBase}/forecast`, {
         timeout: this.timeout,
         params: {
           latitude, longitude,
@@ -194,7 +211,7 @@ class APIService {
           end_date: endDate,
           timezone: 'Asia/Kolkata',
         },
-      });
+      }), 'Open-Meteo History');
 
       const data = {
         location: { latitude, longitude },
@@ -220,7 +237,7 @@ class APIService {
 
     try {
       // Use correct Open-Meteo variable names for soil moisture depths
-      const res = await axios.get(`${this.openMeteoBase}/forecast`, {
+      const res = await this._fetchWithRetry(() => axios.get(`${this.openMeteoBase}/forecast`, {
         timeout: this.timeout,
         params: {
           latitude, longitude,
@@ -229,7 +246,7 @@ class APIService {
           forecast_days: 1,
           timezone: 'Asia/Kolkata',
         },
-      });
+      }), 'Open-Meteo Soil');
 
       const h = res.data.hourly;
 
@@ -294,14 +311,14 @@ class APIService {
     const c = cache.get(ck); if (c) return c;
 
     try {
-      const res = await axios.get(this.openMeteoFlood, {
+      const res = await this._fetchWithRetry(() => axios.get(this.openMeteoFlood, {
         timeout: this.timeout,
         params: {
           latitude, longitude,
           daily: 'river_discharge',
           forecast_days: 7,
         },
-      });
+      }), 'GloFAS Flood');
 
       const daily = res.data.daily || {};
       const vals = (daily.river_discharge || []).filter(v => v !== null);
@@ -335,7 +352,7 @@ class APIService {
       const endDate = this._nasaFmt(this._daysAgo(2));
       const startDate = this._nasaFmt(this._daysAgo(days + 2));
 
-      const res = await axios.get(this.nasaPowerBase, {
+      const res = await this._fetchWithRetry(() => axios.get(this.nasaPowerBase, {
         timeout: 20000,
         params: {
           parameters: 'PRECTOTCORR',
@@ -345,7 +362,7 @@ class APIService {
           community: 'RE',
           format: 'JSON',
         },
-      });
+      }), 'NASA POWER');
 
       const param = res.data?.properties?.parameter?.PRECTOTCORR || {};
       const values = Object.entries(param)
@@ -384,7 +401,7 @@ class APIService {
       const endDate = this._dateFmt(new Date());
       const startDate = this._dateFmt(this._daysAgo(30));
 
-      const res = await axios.get(this.usgsBase, {
+      const res = await this._fetchWithRetry(() => axios.get(this.usgsBase, {
         timeout: this.timeout,
         params: {
           format: 'geojson',
@@ -395,7 +412,7 @@ class APIService {
           minmagnitude: 2.5,
           orderby: 'time',
         },
-      });
+      }), 'USGS Earthquake');
 
       const features = res.data?.features || [];
       const earthquakes = features.map(f => ({
