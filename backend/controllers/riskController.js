@@ -2,18 +2,87 @@ const riskAnalysisService = require('../services/riskAnalysisService');
 const apiService = require('../services/apiService');
 const { damLocations } = require('../utils/damLocations');
 
+const SUMMARY_CACHE_TTL_MS = (Number(process.env.SUMMARY_CACHE_SECONDS) || 180) * 1000;
+const summaryCache = {
+  payload: null,
+  timestamp: 0,
+  inFlight: null,
+};
+
+function hasFreshSummary() {
+  return !!summaryCache.payload && (Date.now() - summaryCache.timestamp) < SUMMARY_CACHE_TTL_MS;
+}
+
+function buildAlertsFromRisks(risks, severity = 'all') {
+  const allAlerts = risks.flatMap((r) => {
+    const flood = { level: r.floodRisk, score: r.floodScore, factors: [] };
+    const landslide = { level: r.landslideRisk, score: r.landslideScore, factors: [] };
+    return riskAnalysisService.generateAlerts(flood, landslide, r.dam?.name || 'Unknown');
+  });
+
+  const filtered = severity !== 'all'
+    ? allAlerts.filter(a => a.severity === severity)
+    : allAlerts;
+
+  return filtered.sort((a, b) => (b.score || 0) - (a.score || 0));
+}
+
+async function buildRiskSummary() {
+  const risks = await processBatched(damLocations, async (dam) => {
+    try {
+      const r = await computeDamRisk(dam);
+      return {
+        dam: {
+          id: dam.id,
+          name: dam.name,
+          state: dam.state,
+          coordinates: { latitude: dam.latitude, longitude: dam.longitude },
+        },
+        floodRisk: r.floodRisk.level,
+        floodScore: r.floodRisk.score,
+        landslideRisk: r.landslideRisk.level,
+        landslideScore: r.landslideRisk.score,
+        overallRisk: Math.max(r.floodRisk.score, r.landslideRisk.score),
+        environmentalSummary: {
+          forecastRainfall: +r.forecastRainfall.toFixed(1),
+          cumRainfall7d: +r.historicalRainfall.toFixed(1),
+          reservoirLevel: +r.reservoirLevel.toFixed(1),
+          riverDischarge: +r.riverDischarge.toFixed(1),
+          soilMoisture: +(r.soilM * 100).toFixed(1),
+          earthquakes: r.quakes.total || 0,
+        },
+      };
+    } catch (err) {
+      console.error(`Error calculating risk for ${dam.name}:`, err.message);
+      return null;
+    }
+  }, 4);
+
+  const sorted = risks.sort((a, b) => b.overallRisk - a.overallRisk);
+  return {
+    risks: sorted,
+    timestamp: new Date().toISOString(),
+    total: sorted.length,
+    dataSources: ['Open-Meteo', 'GloFAS', 'NASA POWER', 'USGS'],
+  };
+}
+
 /**
  * Risk Controller — every score comes from live API data, zero random values.
  * With 50+ dams we process in parallel batches of 5 to balance speed vs rate limits.
  */
 
 // ── Shared helper: fetch all data + compute risk for one dam ──────
-async function computeDamRisk(dam) {
-  const weather = await apiService.fetchRainfallForecast(dam.latitude, dam.longitude);
-  const historical = await apiService.fetchHistoricalRainfall(dam.latitude, dam.longitude, 7);
-  const soil = await apiService.fetchSoilMoisture(dam.latitude, dam.longitude);
-  const flood = await apiService.fetchRiverDischarge(dam.latitude, dam.longitude);
-  const quakes = await apiService.fetchEarthquakeData(dam.latitude, dam.longitude, 300);
+async function computeDamRisk(dam, includeSeismic = false) {
+  const [weather, historical, soil, flood, quakes] = await Promise.all([
+    apiService.fetchRainfallForecast(dam.latitude, dam.longitude),
+    apiService.fetchHistoricalRainfall(dam.latitude, dam.longitude, 7),
+    apiService.fetchSoilMoisture(dam.latitude, dam.longitude),
+    apiService.fetchRiverDischarge(dam.latitude, dam.longitude),
+    includeSeismic
+      ? apiService.fetchEarthquakeData(dam.latitude, dam.longitude, 300)
+      : Promise.resolve({ total: 0, maxMagnitude: 0, source: 'Skipped (aggregate fast mode)' }),
+  ]);
 
   const precipForecastArr = weather.daily?.precipitation_sum || [];
   const forecastRainfall = precipForecastArr.length ? Math.max(...precipForecastArr) : 0;
@@ -64,7 +133,7 @@ async function computeDamRisk(dam) {
 
   return {
     dam, weather, historical, soil, flood, quakes,
-    reservoirs, floodRisk, landslideRisk,
+    floodRisk, landslideRisk,
     forecastRainfall, historicalRainfall, reservoirLevel,
     rainfallTrend, riverDischarge, soilM, deepSoilM,
   };
@@ -79,7 +148,7 @@ async function processBatched(items, fn, batchSize = 5) {
     results.push(...batchResults.filter(Boolean));
 
     if (i + batchSize < items.length) {
-      await new Promise(resolve => setTimeout(resolve, 250));
+      await new Promise(resolve => setTimeout(resolve, 100));
     }
   }
   return results;
@@ -232,40 +301,28 @@ class RiskController {
   /* ── Risk overview for all dams ──────────────────────────────────── */
   async getAllRisks(req, res, next) {
     try {
-      const risks = await processBatched(damLocations, async (dam) => {
-        try {
-          const r = await computeDamRisk(dam);
-          return {
-            dam: {
-              id: dam.id, name: dam.name, state: dam.state,
-              coordinates: { latitude: dam.latitude, longitude: dam.longitude },
-            },
-            floodRisk: r.floodRisk.level,
-            floodScore: r.floodRisk.score,
-            landslideRisk: r.landslideRisk.level,
-            landslideScore: r.landslideRisk.score,
-            overallRisk: Math.max(r.floodRisk.score, r.landslideRisk.score),
-            environmentalSummary: {
-              forecastRainfall: +r.forecastRainfall.toFixed(1),
-              cumRainfall7d: +r.historicalRainfall.toFixed(1),
-              reservoirLevel: +r.reservoirLevel.toFixed(1),
-              riverDischarge: +r.riverDischarge.toFixed(1),
-              soilMoisture: +(r.soilM * 100).toFixed(1),
-              earthquakes: r.quakes.total || 0,
-            },
-          };
-        } catch (err) {
-          console.error(`Error calculating risk for ${dam.name}:`, err.message);
-          return null;
-        }
-      }, 2);
+      if (hasFreshSummary()) {
+        return res.json({ ...summaryCache.payload, cached: true });
+      }
 
-      res.json({
-        risks: risks.sort((a, b) => b.overallRisk - a.overallRisk),
-        timestamp: new Date().toISOString(),
-        total: risks.length,
-        dataSources: ['Open-Meteo', 'GloFAS', 'NASA POWER', 'USGS'],
-      });
+      if (!summaryCache.inFlight) {
+        summaryCache.inFlight = buildRiskSummary()
+          .then((payload) => {
+            summaryCache.payload = payload;
+            summaryCache.timestamp = Date.now();
+            return payload;
+          })
+          .finally(() => {
+            summaryCache.inFlight = null;
+          });
+      }
+
+      if (summaryCache.payload) {
+        return res.json({ ...summaryCache.payload, cached: true, stale: true, refreshing: true });
+      }
+
+      const payload = await summaryCache.inFlight;
+      return res.json({ ...payload, cached: false });
     } catch (error) { next(error); }
   }
 
@@ -274,24 +331,31 @@ class RiskController {
     try {
       const { severity = 'all' } = req.query;
 
-      const allAlerts = await processBatched(damLocations, async (dam) => {
-        try {
-          const r = await computeDamRisk(dam);
-          return riskAnalysisService.generateAlerts(r.floodRisk, r.landslideRisk, dam.name);
-        } catch (err) {
-          console.error(`Error generating alerts for ${dam.name}:`, err.message);
-          return [];
+      if (!hasFreshSummary()) {
+        if (!summaryCache.inFlight) {
+          summaryCache.inFlight = buildRiskSummary()
+            .then((payload) => {
+              summaryCache.payload = payload;
+              summaryCache.timestamp = Date.now();
+              return payload;
+            })
+            .finally(() => {
+              summaryCache.inFlight = null;
+            });
         }
-      }, 2);
 
-      // Flatten (each dam returns an array of alerts)
-      const flat = allAlerts.flat();
-      const filtered = severity !== 'all' ? flat.filter(a => a.severity === severity) : flat;
+        if (!summaryCache.payload) {
+          await summaryCache.inFlight;
+        }
+      }
+
+      const risks = summaryCache.payload?.risks || [];
+      const alerts = buildAlertsFromRisks(risks, severity);
 
       res.json({
-        alerts: filtered.sort((a, b) => (b.score || 0) - (a.score || 0)),
+        alerts,
         timestamp: new Date().toISOString(),
-        total: filtered.length,
+        total: alerts.length,
         dataSources: ['Open-Meteo', 'GloFAS', 'NASA POWER', 'USGS'],
       });
     } catch (error) { next(error); }
