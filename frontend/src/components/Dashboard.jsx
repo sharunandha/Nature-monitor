@@ -524,8 +524,12 @@ export const Dashboard = ({
 };
 
 export const PredictiveAnalytics = ({ risks, dams }) => {
-  const highRiskDams = risks?.filter(r => r.floodRisk === 'HIGH' || r.landslideRisk === 'HIGH') || [];
-  const predictedImpacts = highRiskDams.map(risk => {
+  const prioritizedRisks = (risks || [])
+    .filter(r => ['HIGH', 'MEDIUM'].includes(r.floodRisk) || ['HIGH', 'MEDIUM'].includes(r.landslideRisk))
+    .sort((a, b) => Math.max(b.floodScore || 0, b.landslideScore || 0) - Math.max(a.floodScore || 0, a.landslideScore || 0))
+    .slice(0, 8);
+
+  const predictedImpacts = prioritizedRisks.map(risk => {
     const dam = dams.find(d => d.id === risk.dam?.id);
     const riskScore = Math.max(risk.floodScore || 0, risk.landslideScore || 0);
     const capacity = Number(dam?.capacity || 0);

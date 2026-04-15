@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useState } from 'react';
 import { dataAPI } from '../services/api';
 import { LoadingSpinner } from './Common';
 import { ReservoirTopDamsChart, StateReservoirSummaryChart } from './Charts';
@@ -27,54 +27,67 @@ const trendCell = (trend = 'STABLE') => {
 
 export const ReservoirMonitor = () => {
   const [loading, setLoading] = useState(false);
-  const [loadingAll, setLoadingAll] = useState(false);
+  const [allDams, setAllDams] = useState([]);
   const [stateRows, setStateRows] = useState([]);
   const [selectedState, setSelectedState] = useState('');
-  const [dams, setDams] = useState([]);
   const [sortBy, setSortBy] = useState('percentageFull');
   const [sortDir, setSortDir] = useState('desc');
 
-  const fetchStates = useCallback(async () => {
-    const response = await dataAPI.getStates();
-    const states = response.data?.states || [];
-    setStateRows(states);
-    if (!selectedState && states[0]) {
-      setSelectedState(states[0].name);
-    }
-  }, [selectedState]);
-
-  const fetchByState = async (stateName) => {
-    if (!stateName) return;
+  const fetchAll = async () => {
     setLoading(true);
     try {
-      const response = await dataAPI.getReservoirLevelsByState(stateName);
-      setDams(response.data?.dams || []);
+      const response = await dataAPI.getReservoirLevels();
+      const dams = response.data?.dams || [];
+      setAllDams(dams);
+
+      const grouped = dams.reduce((acc, dam) => {
+        if (!acc[dam.state]) acc[dam.state] = [];
+        acc[dam.state].push(dam);
+        return acc;
+      }, {});
+
+      const states = Object.keys(grouped).sort().map((stateName) => {
+        const rows = grouped[stateName];
+        const avgFill = rows.length
+          ? rows.reduce((sum, d) => sum + Number(d.reservoir?.percentageFull || 0), 0) / rows.length
+          : 0;
+        const avgLastYear = rows.length
+          ? rows.reduce((sum, d) => sum + Number(d.reservoir?.lastYearPercentage || 0), 0) / rows.length
+          : 0;
+        const avgTenYear = rows.length
+          ? rows.reduce((sum, d) => sum + Number(d.reservoir?.tenYearAveragePercent || 0), 0) / rows.length
+          : 0;
+
+        return {
+          name: stateName,
+          damCount: rows.length,
+          avgFillPercent: +avgFill.toFixed(1),
+          avgLastYearPercent: +avgLastYear.toFixed(1),
+          avgTenYearPercent: +avgTenYear.toFixed(1),
+        };
+      });
+
+      setStateRows(states);
+      if (!selectedState && states.length) {
+        setSelectedState(states[0].name);
+      }
     } finally {
       setLoading(false);
     }
   };
 
-  const fetchAll = async () => {
-    setLoadingAll(true);
-    try {
-      const response = await dataAPI.getReservoirLevels();
-      setSelectedState('');
-      setDams(response.data?.dams || []);
-    } finally {
-      setLoadingAll(false);
-    }
-  };
-
   useEffect(() => {
-    fetchStates();
-  }, [fetchStates]);
+    fetchAll();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
-  useEffect(() => {
-    if (selectedState) fetchByState(selectedState);
-  }, [selectedState]);
+  const filteredDams = useMemo(() => {
+    if (!selectedState) return allDams;
+    return allDams.filter(d => d.state === selectedState);
+  }, [allDams, selectedState]);
 
   const sortedDams = useMemo(() => {
-    const items = [...dams];
+    const items = [...filteredDams];
     const getter = (dam) => {
       if (sortBy === 'percentageFull') return Number(dam.reservoir?.percentageFull || 0);
       if (sortBy === 'currentLevel') return Number(dam.reservoir?.currentLevel || 0);
@@ -95,15 +108,15 @@ export const ReservoirMonitor = () => {
         : String(vb).localeCompare(String(va));
     });
     return items;
-  }, [dams, sortBy, sortDir]);
+  }, [filteredDams, sortBy, sortDir]);
 
   const summary = useMemo(() => {
     const totalDams = stateRows.reduce((sum, s) => sum + Number(s.damCount || 0), 0);
     const statesCovered = stateRows.length;
-    const criticalHigh = dams.filter(d => d.reservoir?.status === 'CRITICAL_HIGH').length;
-    const criticalLow = dams.filter(d => d.reservoir?.status === 'CRITICAL_LOW').length;
+    const criticalHigh = filteredDams.filter(d => d.reservoir?.status === 'CRITICAL_HIGH').length;
+    const criticalLow = filteredDams.filter(d => d.reservoir?.status === 'CRITICAL_LOW').length;
     return { totalDams, statesCovered, criticalHigh, criticalLow };
-  }, [stateRows, dams]);
+  }, [stateRows, filteredDams]);
 
   const clickSort = (col) => {
     if (sortBy === col) {
@@ -124,9 +137,9 @@ export const ReservoirMonitor = () => {
           <button
             onClick={fetchAll}
             className="px-3 py-1.5 rounded bg-blue-600 hover:bg-blue-700 text-white text-sm"
-            disabled={loadingAll}
+            disabled={loading}
           >
-            {loadingAll ? 'Loading all...' : 'Load All Dams'}
+            {loading ? 'Loading...' : 'Refresh'}
           </button>
         </div>
 

@@ -119,21 +119,31 @@ function App() {
       setLoading(true);
       setError(null);
 
-      const [damsRes, risksRes] = await Promise.all([
+      const [damsResult, risksResult] = await Promise.allSettled([
         dataAPI.getDamLocations(),
         riskAPI.getAllRisks(),
       ]);
 
-      const risks = risksRes.data.risks || [];
-      setDams(damsRes.data.dams || []);
-      setRisks(risks);
-      setAlerts(buildAlertsFromRisks(risks));
+      if (damsResult.status === 'fulfilled') {
+        setDams(damsResult.value?.data?.dams || []);
+      }
+
+      if (risksResult.status === 'fulfilled') {
+        const nextRisks = risksResult.value?.data?.risks || [];
+        setRisks(nextRisks);
+        setAlerts(buildAlertsFromRisks(nextRisks));
+      }
+
+      if (damsResult.status !== 'fulfilled' || risksResult.status !== 'fulfilled') {
+        setError('Some live data sources are delayed. Showing cached/simulated values where available.');
+      }
+
       setLastUpdated(new Date().toISOString());
       fetchReservoirStates();
 
       // Select first dam by default
-      if (damsRes.data.dams?.length > 0 && !selectedDam) {
-        setSelectedDam(damsRes.data.dams[0].id);
+      if (damsResult.status === 'fulfilled' && damsResult.value?.data?.dams?.length > 0 && !selectedDam) {
+        setSelectedDam(damsResult.value.data.dams[0].id);
       }
     } catch (err) {
       console.error('Error fetching data:', err);
@@ -310,7 +320,9 @@ function App() {
       rainfallData.forecast.daily.precipitation_sum.reduce((s, v) => s + (v || 0), 0)
       / rainfallData.forecast.daily.precipitation_sum.length
     ).toFixed(1)
-    : +(rainfallData?.nasa?.stats?.avgPrecip || 0).toFixed(1);
+    : risks?.length > 0
+      ? +(risks.reduce((s, r) => s + Number(r.environmentalSummary?.forecastRainfall || 0), 0) / risks.length).toFixed(1)
+      : +(rainfallData?.nasa?.stats?.avgPrecip || 0).toFixed(1);
   const earthquakesCount = selectedRiskData?.environmentalData?.earthquakes?.recentCount || 0;
 
   const historicalRiskData = selectedRiskData ? {
