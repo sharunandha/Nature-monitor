@@ -126,14 +126,15 @@ class DataController {
 
   async getStates(req, res, next) {
     try {
-      const grouped = damLocations.reduce((acc, dam) => {
+      const allWithReservoir = await apiService.fetchReservoirLevels(damLocations);
+      const grouped = allWithReservoir.reduce((acc, dam) => {
         if (!acc[dam.state]) acc[dam.state] = [];
         acc[dam.state].push(dam);
         return acc;
       }, {});
 
       const states = await Promise.all(Object.keys(grouped).sort().map(async (stateName) => {
-        const damsWithReservoir = await apiService.fetchReservoirLevels(grouped[stateName]);
+        const damsWithReservoir = grouped[stateName];
         const avgFillPercent = damsWithReservoir.length
           ? damsWithReservoir.reduce((sum, d) => sum + Number(d.reservoir?.percentageFull || 0), 0) / damsWithReservoir.length
           : 0;

@@ -90,33 +90,63 @@ function buildAlertsFromRiskRows(risks, severity = 'all') {
 }
 
 async function buildRiskSummary() {
-  const risks = await processBatched(damLocations, async (dam) => {
-    try {
-      const r = await computeDamRisk(dam);
-      return {
-        dam: {
-          id: dam.id, name: dam.name, state: dam.state,
-          coordinates: { latitude: dam.latitude, longitude: dam.longitude },
-        },
-        floodRisk: r.floodRisk.level,
-        floodScore: r.floodRisk.score,
-        landslideRisk: r.landslideRisk.level,
-        landslideScore: r.landslideRisk.score,
-        overallRisk: Math.max(r.floodRisk.score, r.landslideRisk.score),
-        environmentalSummary: {
-          forecastRainfall: +r.forecastRainfall.toFixed(1),
-          cumRainfall7d: +r.historicalRainfall.toFixed(1),
-          reservoirLevel: +r.reservoirLevel.toFixed(1),
-          riverDischarge: +r.riverDischarge.toFixed(1),
-          soilMoisture: +(r.soilM * 100).toFixed(1),
-          earthquakes: r.quakes.total || 0,
-        },
-      };
-    } catch (err) {
-      console.error(`Error calculating risk for ${dam.name}:`, err.message);
-      return null;
-    }
-  }, 4);
+  const reservoirs = await apiService.fetchReservoirLevels(damLocations);
+  const risks = reservoirs.map((row) => {
+    const dam = row;
+    const reservoir = row.reservoir || {};
+    const reservoirLevel = Number(reservoir.percentageFull || 0);
+
+    // Fast summary-mode proxies that avoid external API quota exhaustion.
+    const forecastRainfall = +(Math.max(0, (reservoirLevel - 20) * 1.2)).toFixed(1);
+    const historicalRainfall = +(Math.max(0, reservoirLevel * 1.8)).toFixed(1);
+    const riverDischarge = +(Math.max(20, reservoirLevel * 32)).toFixed(1);
+    const soilM = Math.max(0.08, Math.min(0.55, reservoirLevel / 180));
+    const deepSoilM = Math.max(0.12, Math.min(0.65, soilM + 0.08));
+    const rainfallTrend = String(reservoir.trend || 'STABLE').toLowerCase() === 'rising'
+      ? 'increasing'
+      : String(reservoir.trend || 'STABLE').toLowerCase() === 'falling'
+        ? 'decreasing'
+        : 'stable';
+
+    const floodRisk = riskAnalysisService.calculateFloodRisk({
+      reservoir,
+      reservoirLevel,
+      forecastRainfall,
+      historicalRainfall,
+      riverDischarge,
+      rainfallTrend,
+    });
+
+    const landslideRisk = riskAnalysisService.calculateLandslideRisk({
+      soilMoisture: soilM,
+      rainfallAccumulation: historicalRainfall,
+      earthquakeMagnitude: 0,
+      earthquakeCount: 0,
+      state: dam.state,
+      deepSoilMoisture: deepSoilM,
+    });
+
+    return {
+      dam: {
+        id: dam.id, name: dam.name, state: dam.state,
+        coordinates: { latitude: dam.latitude, longitude: dam.longitude },
+      },
+      floodRisk: floodRisk.level,
+      floodScore: floodRisk.score,
+      landslideRisk: landslideRisk.level,
+      landslideScore: landslideRisk.score,
+      overallRisk: Math.max(floodRisk.score, landslideRisk.score),
+      environmentalSummary: {
+        forecastRainfall,
+        cumRainfall7d: historicalRainfall,
+        reservoirLevel: +reservoirLevel.toFixed(1),
+        riverDischarge,
+        soilMoisture: +(soilM * 100).toFixed(1),
+        earthquakes: 0,
+      },
+      summaryMode: 'FAST_RESERVOIR_PROXY',
+    };
+  });
 
   const sorted = risks.sort((a, b) => b.overallRisk - a.overallRisk);
   return {

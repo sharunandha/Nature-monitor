@@ -27,11 +27,13 @@ class APIService {
     this.usgsWaterBase = 'https://waterservices.usgs.gov/nwis';
     this.newsApiBase = 'https://newsapi.org/v2';
     this.sentinelHubBase = 'https://services.sentinel-hub.com';
+    this.enableWris = process.env.ENABLE_WRIS === 'true';
     this.wrisEndpoints = [
       process.env.INDIA_WRIS_API_URL,
       'https://indiawris.gov.in/wris/api/reservoirs',
       'https://indiawris.gov.in/wris/api/dams',
     ].filter(Boolean);
+    this.wrisUnavailableUntil = 0;
     this.timeout = 15000;
 
     // API Keys (would be in environment variables in production)
@@ -85,6 +87,139 @@ class APIService {
     }[month];
   }
 
+  _seasonalBaseByLocation(latitude, month) {
+    // Tamil Nadu / southeast coast gets stronger NE monsoon signal in Oct-Dec.
+    if (latitude < 13.5) {
+      return {
+        0: 0.24, 1: 0.18, 2: 0.12, 3: 0.10, 4: 0.14, 5: 0.20,
+        6: 0.28, 7: 0.35, 8: 0.42, 9: 0.58, 10: 0.70, 11: 0.62,
+      }[month];
+    }
+
+    // Most Indian basins: SW monsoon dominant.
+    return {
+      0: 0.10, 1: 0.08, 2: 0.06, 3: 0.05, 4: 0.08, 5: 0.20,
+      6: 0.55, 7: 0.82, 8: 0.92, 9: 0.62, 10: 0.24, 11: 0.14,
+    }[month];
+  }
+
+  _buildDateSeries(days) {
+    const dates = [];
+    for (let i = 0; i < days; i += 1) {
+      const d = new Date();
+      d.setDate(d.getDate() + i);
+      dates.push(d.toISOString().slice(0, 10));
+    }
+    return dates;
+  }
+
+  _fallbackRainfallForecast(latitude, longitude, days = 7) {
+    const month = new Date().getMonth();
+    const seasonal = this._seasonalBaseByLocation(latitude, month);
+    const phase = (Math.abs(latitude) + Math.abs(longitude)) / 7;
+    const dates = this._buildDateSeries(days);
+    const precipitation = dates.map((_, idx) => {
+      const wave = 0.5 + 0.5 * Math.sin(phase + idx * 0.9);
+      return +Math.max(0, (seasonal * 65) * wave).toFixed(1);
+    });
+
+    return {
+      location: { latitude, longitude },
+      daily: {
+        time: dates,
+        precipitation_sum: precipitation,
+        rain_sum: precipitation,
+        precipitation_probability_max: precipitation.map(v => Math.min(95, Math.round(v * 2))),
+        temperature_2m_max: precipitation.map((_, i) => +(31 - seasonal * 8 + Math.sin(i * 0.4) * 2).toFixed(1)),
+        temperature_2m_min: precipitation.map((_, i) => +(22 - seasonal * 4 + Math.cos(i * 0.4)).toFixed(1)),
+        windspeed_10m_max: precipitation.map((_, i) => +(12 + Math.sin(i * 0.3) * 3).toFixed(1)),
+      },
+      hourly: null,
+      source: 'SIMULATED_WEATHER_FALLBACK',
+      timestamp: new Date().toISOString(),
+      fallbackFrom: 'Open-Meteo',
+    };
+  }
+
+  _fallbackHistoricalRainfall(latitude, longitude, days = 7) {
+    const month = new Date().getMonth();
+    const seasonal = this._seasonalBaseByLocation(latitude, month);
+    const phase = (Math.abs(latitude) + Math.abs(longitude)) / 6;
+    const dates = [];
+    const precipitation = [];
+
+    for (let i = days; i >= 1; i -= 1) {
+      const d = new Date();
+      d.setDate(d.getDate() - i);
+      dates.push(d.toISOString().slice(0, 10));
+      const wave = 0.5 + 0.5 * Math.sin(phase + i * 0.8);
+      precipitation.push(+Math.max(0, (seasonal * 55) * wave).toFixed(1));
+    }
+
+    return {
+      location: { latitude, longitude },
+      period: { startDate: dates[0], endDate: dates[dates.length - 1] },
+      daily: {
+        time: dates,
+        precipitation_sum: precipitation,
+        rain_sum: precipitation,
+      },
+      source: 'SIMULATED_HISTORY_FALLBACK',
+      timestamp: new Date().toISOString(),
+      fallbackFrom: 'Open-Meteo',
+    };
+  }
+
+  _fallbackSoilMoisture(latitude, longitude) {
+    const month = new Date().getMonth();
+    const seasonal = this._seasonalBaseByLocation(latitude, month);
+    const seed = (Math.abs(latitude) * 13 + Math.abs(longitude) * 17) % 1;
+    const surface = +(0.12 + seasonal * 0.35 + seed * 0.05).toFixed(4);
+    const deep = +(Math.min(0.6, surface + 0.08)).toFixed(4);
+
+    return {
+      location: { latitude, longitude },
+      current: {
+        moisture_0_7cm: surface,
+        moisture_7_28cm: +((surface + deep) / 2).toFixed(4),
+        moisture_28_100cm: deep,
+        temperature_0_7cm: +(20 + (1 - seasonal) * 12).toFixed(1),
+      },
+      avg24h: {
+        moisture_0_7cm: surface,
+        moisture_7_28cm: +((surface + deep) / 2).toFixed(4),
+        moisture_28_100cm: deep,
+      },
+      source: 'SIMULATED_SOIL_FALLBACK',
+      timestamp: new Date().toISOString(),
+      fallbackFrom: 'Open-Meteo',
+    };
+  }
+
+  _fallbackRiverDischarge(latitude, longitude) {
+    const month = new Date().getMonth();
+    const seasonal = this._seasonalBaseByLocation(latitude, month);
+    const dates = this._buildDateSeries(7);
+    const base = 120 + seasonal * 1800;
+    const series = dates.map((_, i) => +(base * (0.7 + 0.3 * Math.sin(i * 0.8 + latitude))).toFixed(2));
+    const maxD = Math.max(...series);
+    const avgD = this._avg(series);
+    const latestD = series[series.length - 1];
+
+    return {
+      location: { latitude, longitude },
+      daily: { time: dates, river_discharge: series },
+      stats: {
+        maxDischarge: +maxD.toFixed(2),
+        avgDischarge: +avgD.toFixed(2),
+        latestDischarge: +latestD.toFixed(2),
+      },
+      source: 'SIMULATED_DISCHARGE_FALLBACK',
+      timestamp: new Date().toISOString(),
+      fallbackFrom: 'GloFAS',
+    };
+  }
+
   generateRealisticReservoirLevel(dam, date = new Date()) {
     const seasonalBase = this._seasonalBaseByState(dam, date);
     const charValue = dam.id ? dam.id.charCodeAt(0) : 77;
@@ -117,7 +252,8 @@ class APIService {
   }
 
   async fetchIndiaWRISReservoirLevel(dam) {
-    if (!this.wrisEndpoints.length) return null;
+    if (!this.enableWris || !this.wrisEndpoints.length) return null;
+    if (Date.now() < this.wrisUnavailableUntil) return null;
 
     for (const endpoint of this.wrisEndpoints) {
       try {
@@ -159,7 +295,10 @@ class APIService {
           dataSource: 'INDIA_WRIS',
         };
       } catch (err) {
-        // Continue trying additional endpoints and fallback simulation.
+        // Circuit-breaker for repeated WRIS timeout failures.
+        if (err?.code === 'ECONNABORTED' || err?.response?.status >= 500) {
+          this.wrisUnavailableUntil = Date.now() + (6 * 60 * 60 * 1000);
+        }
         console.warn(`[India WRIS] ${endpoint} unavailable: ${this._errorSummary(err)}`);
       }
     }
@@ -368,12 +507,10 @@ class APIService {
       } catch (fallbackErr) {
         const fallbackMsg = this._errorSummary(fallbackErr);
         console.error(`[met.no Rain Forecast] ${fallbackMsg}`);
-        return {
-          error: `${msg} | fallback_failed=${fallbackMsg}`,
-          location: { latitude, longitude },
-          daily: null,
-          hourly: null,
-        };
+        const synthetic = this._fallbackRainfallForecast(latitude, longitude, 7);
+        synthetic.error = `${msg} | fallback_failed=${fallbackMsg}`;
+        cache.set(ck, synthetic, cache.cacheDurations?.rainfall);
+        return synthetic;
       }
     }
   }
@@ -511,7 +648,10 @@ class APIService {
     } catch (err) {
       const msg = this._errorSummary(err);
       console.error(`[Open-Meteo History] ${msg}`);
-      return { error: msg, location: { latitude, longitude }, daily: null };
+      const synthetic = this._fallbackHistoricalRainfall(latitude, longitude, days);
+      synthetic.error = msg;
+      cache.set(ck, synthetic, cache.cacheDurations?.rainfall);
+      return synthetic;
     }
   }
 
@@ -587,7 +727,10 @@ class APIService {
     } catch (err) {
       const msg = this._errorSummary(err);
       console.error(`[Open-Meteo Soil] ${msg}`);
-      return { error: msg, location: { latitude, longitude }, current: null, avg24h: null };
+      const synthetic = this._fallbackSoilMoisture(latitude, longitude);
+      synthetic.error = msg;
+      cache.set(ck, synthetic, cache.cacheDurations?.rainfall);
+      return synthetic;
     }
   }
 
@@ -626,7 +769,10 @@ class APIService {
     } catch (err) {
       const msg = this._errorSummary(err);
       console.error(`[GloFAS Flood] ${msg}`);
-      return { error: msg, location: { latitude, longitude }, daily: null, stats: { maxDischarge: 0, avgDischarge: 0, latestDischarge: 0 } };
+      const synthetic = this._fallbackRiverDischarge(latitude, longitude);
+      synthetic.error = msg;
+      cache.set(ck, synthetic, cache.cacheDurations?.rainfall);
+      return synthetic;
     }
   }
 
