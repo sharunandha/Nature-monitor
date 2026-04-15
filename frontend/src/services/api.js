@@ -18,9 +18,21 @@ export const dataAPI = {
   
   getReservoirLevels: () =>
     apiClient.get('/data/reservoirs'),
+
+  getReservoirLevelByDam: (damId) =>
+    apiClient.get(`/data/reservoirs/${damId}`),
+
+  getReservoirLevelsByState: (stateName) =>
+    apiClient.get(`/data/reservoirs/state/${encodeURIComponent(stateName)}`),
   
   getDamLocations: () =>
     apiClient.get('/data/dams'),
+
+  getDamsByState: (stateName) =>
+    apiClient.get(`/data/dams/state/${encodeURIComponent(stateName)}`),
+
+  getStates: () =>
+    apiClient.get('/data/states'),
 
   getSoilMoisture: (latitude, longitude) =>
     apiClient.get('/data/soil', { params: { latitude, longitude } }),

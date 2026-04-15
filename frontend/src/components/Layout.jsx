@@ -42,7 +42,7 @@ export const Header = ({ lastUpdated, onRefresh, isLoading, currentView, onViewC
         <div className="flex flex-col md:flex-row items-start md:items-center gap-3 w-full lg:w-auto">
           {/* Navigation Buttons */}
           <div className="flex gap-2 w-full md:w-auto">
-            {['dashboard', 'map', 'charts'].map(view => (
+            {['dashboard', 'map', 'charts', 'reservoirs'].map(view => (
               <button
                 key={view}
                 onClick={() => onViewChange(view)}
@@ -55,6 +55,7 @@ export const Header = ({ lastUpdated, onRefresh, isLoading, currentView, onViewC
                 {view === 'dashboard' && '📊'}
                 {view === 'map' && '🗺️'}
                 {view === 'charts' && '📈'}
+                {view === 'reservoirs' && '💧'}
                 <span className="hidden sm:inline ml-1">{view.charAt(0).toUpperCase() + view.slice(1)}</span>
               </button>
             ))}
@@ -98,12 +99,16 @@ export const Header = ({ lastUpdated, onRefresh, isLoading, currentView, onViewC
 export const Drawer = ({ isOpen, onClose, regions, selectedRegion, onRegionChange, dams, selectedDam, onDamSelect }) => {
   const [searchTerm, setSearchTerm] = useState('');
 
-  // Filter dams by search term
-  const filteredDams = dams?.filter(dam =>
+  const baseDams = selectedRegion
+    ? (dams || []).filter(dam => dam.state === selectedRegion)
+    : (dams || []);
+
+  // Filter dams by selected state + search term.
+  const filteredDams = baseDams.filter(dam =>
     dam.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
     dam.state.toLowerCase().includes(searchTerm.toLowerCase()) ||
     (dam.river || '').toLowerCase().includes(searchTerm.toLowerCase())
-  ) || [];
+  );
 
   // Group filtered dams by state
   const damsByState = filteredDams.reduce((acc, dam) => {
@@ -112,7 +117,7 @@ export const Drawer = ({ isOpen, onClose, regions, selectedRegion, onRegionChang
     return acc;
   }, {});
 
-  // All states from unfiltered dams (for the dropdown)
+  // All states from full dam list (for the dropdown)
   const allStates = [...new Set((dams || []).map(d => d.state))].sort();
 
   return (
@@ -231,7 +236,7 @@ export const Footer = () => {
 export const ViewToggle = ({ currentView, onViewChange }) => {
   return (
     <div className="flex space-x-2 bg-gray-100 p-1 rounded-lg w-fit">
-      {['dashboard', 'map', 'charts'].map(view => (
+      {['dashboard', 'map', 'charts', 'reservoirs'].map(view => (
         <button
           key={view}
           onClick={() => onViewChange(view)}
@@ -244,6 +249,7 @@ export const ViewToggle = ({ currentView, onViewChange }) => {
           {view === 'dashboard' && '📊 Dashboard'}
           {view === 'map' && '🗺️ Map'}
           {view === 'charts' && '📈 Analytics'}
+          {view === 'reservoirs' && '💧 Reservoirs'}
         </button>
       ))}
     </div>

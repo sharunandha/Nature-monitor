@@ -4,6 +4,7 @@ import { Dashboard, EmergencyContacts, PredictiveAnalytics, LiveWeatherMonitor }
 import { MapComponent } from './components/Map';
 import { RiskDetailsPanel } from './components/RiskPanel';
 import { RainfallChart, RiskTrendChart, HistoricalComparisonChart } from './components/Charts';
+import ReservoirMonitor from './components/ReservoirMonitor';
 import { LoadingSpinner, ErrorAlert, Toast } from './components/Common';
 import apiClient, { dataAPI, riskAPI } from './services/api';
 import { exportRiskData, exportRainfallData, exportToPDF } from './utils/helpers';
@@ -80,7 +81,39 @@ function App() {
   const [selectedRiskData, setSelectedRiskData] = useState(null);
   const [rainfallData, setRainfallData] = useState(null);
   const [advancedRiskData, setAdvancedRiskData] = useState(null);
+  const [reservoirStates, setReservoirStates] = useState([]);
+  const [reservoirByDam, setReservoirByDam] = useState({});
   const [toast, setToast] = useState(null);
+
+  const fetchReservoirStates = useCallback(async () => {
+    try {
+      const response = await dataAPI.getStates();
+      setReservoirStates(response.data?.states || []);
+    } catch (err) {
+      console.error('Error fetching reservoir states:', err);
+    }
+  }, []);
+
+  const fetchReservoirsForMap = useCallback(async () => {
+    try {
+      let damsWithReservoir = [];
+      if (selectedRegion) {
+        const response = await dataAPI.getReservoirLevelsByState(selectedRegion);
+        damsWithReservoir = response.data?.dams || [];
+      } else {
+        const response = await dataAPI.getReservoirLevels();
+        damsWithReservoir = response.data?.dams || [];
+      }
+
+      const mapped = damsWithReservoir.reduce((acc, dam) => {
+        acc[dam.id] = dam.reservoir || {};
+        return acc;
+      }, {});
+      setReservoirByDam(mapped);
+    } catch (err) {
+      console.error('Error fetching map reservoirs:', err);
+    }
+  }, [selectedRegion]);
   const fetchData = useCallback(async () => {
     try {
       setLoading(true);
@@ -96,6 +129,7 @@ function App() {
       setRisks(risks);
       setAlerts(buildAlertsFromRisks(risks));
       setLastUpdated(new Date().toISOString());
+      fetchReservoirStates();
 
       // Select first dam by default
       if (damsRes.data.dams?.length > 0 && !selectedDam) {
@@ -107,7 +141,7 @@ function App() {
     } finally {
       setLoading(false);
     }
-  }, [selectedDam]);
+  }, [selectedDam, fetchReservoirStates]);
 
   // Fetch detailed risk data for selected dam
   const fetchDamRiskDetails = useCallback(async (damId) => {
@@ -255,6 +289,12 @@ function App() {
     }
   }, [selectedDam, fetchDamRiskDetails, fetchRainfallForDam, fetchAdvancedRiskForDam]);
 
+  useEffect(() => {
+    if (currentView === 'map') {
+      fetchReservoirsForMap();
+    }
+  }, [currentView, selectedRegion, fetchReservoirsForMap]);
+
   const filteredDams = selectedRegion
     ? dams.filter(d => d.state === selectedRegion)
     : dams;
@@ -293,7 +333,7 @@ function App() {
       <div className="flex items-center justify-center h-screen bg-gray-50">
         <div className="text-center">
           <LoadingSpinner size="lg" />
-          <p className="mt-4 text-gray-600">Fetching live data for 50+ dams across India...</p>
+          <p className="mt-4 text-gray-600">Fetching live data for 100+ dams across India...</p>
           <p className="mt-2 text-xs text-gray-400">First load may take 30-60 seconds (calling Open-Meteo, NASA, USGS, GloFAS for each dam)</p>
         </div>
       </div>
@@ -359,7 +399,7 @@ function App() {
           regions={[...new Set(dams.map(d => d.state))]}
           selectedRegion={selectedRegion}
           onRegionChange={setSelectedRegion}
-          dams={filteredDams}
+          dams={dams}
           selectedDam={selectedDam}
           onDamSelect={setSelectedDam}
         />
@@ -391,6 +431,7 @@ function App() {
                         risks={filteredRisks}
                         alerts={alerts}
                         advancedRiskData={advancedRiskData}
+                        reservoirStates={reservoirStates}
                         onEmergencyContacts={handleEmergencyContacts}
                         onDetailedReport={handleDetailedReport}
                         onSetNotifications={handleSetNotifications}
@@ -415,9 +456,10 @@ function App() {
                     <div className="xl:col-span-3">
                       <div className="bg-white border border-gray-200 rounded-lg p-2 md:p-4 shadow-sm overflow-hidden" style={{ height: 'clamp(360px, 62vh, 760px)' }}>
                         <MapComponent
-                          dams={filteredDams}
-                          risks={filteredRisks}
+                          dams={dams}
                           selectedDam={selectedDam}
+                          selectedState={selectedRegion}
+                          reservoirByDam={reservoirByDam}
                           onDamSelect={setSelectedDam}
                         />
                       </div>
@@ -501,6 +543,10 @@ function App() {
                     </div>
                   </div>
                 </div>
+              )}
+
+              {currentView === 'reservoirs' && (
+                <ReservoirMonitor />
               )}
             </div>
           </div>

@@ -27,12 +27,144 @@ class APIService {
     this.usgsWaterBase = 'https://waterservices.usgs.gov/nwis';
     this.newsApiBase = 'https://newsapi.org/v2';
     this.sentinelHubBase = 'https://services.sentinel-hub.com';
+    this.wrisEndpoints = [
+      process.env.INDIA_WRIS_API_URL,
+      'https://indiawris.gov.in/wris/api/reservoirs',
+      'https://indiawris.gov.in/wris/api/dams',
+    ].filter(Boolean);
     this.timeout = 15000;
 
     // API Keys (would be in environment variables in production)
     this.weatherApiKey = process.env.WEATHERAPI_KEY || 'demo_key';
     this.newsApiKey = process.env.NEWSAPI_KEY || 'demo_key';
     this.sentinelHubKey = process.env.SENTINEL_HUB_KEY || 'demo_key';
+  }
+
+  _hourStamp(date = new Date()) {
+    const y = date.getUTCFullYear();
+    const m = String(date.getUTCMonth() + 1).padStart(2, '0');
+    const d = String(date.getUTCDate()).padStart(2, '0');
+    const h = String(date.getUTCHours()).padStart(2, '0');
+    return `${y}${m}${d}${h}`;
+  }
+
+  _seasonalBaseByState(dam, date) {
+    const month = date.getMonth();
+
+    // Tamil Nadu relies heavily on NE monsoon (Oct-Dec), so peak shifts later.
+    if ((dam.state || '').toLowerCase() === 'tamil nadu') {
+      return {
+        0: 0.62,
+        1: 0.52,
+        2: 0.38,
+        3: 0.28,
+        4: 0.22,
+        5: 0.26,
+        6: 0.34,
+        7: 0.45,
+        8: 0.62,
+        9: 0.82,
+        10: 0.92,
+        11: 0.86,
+      }[month];
+    }
+
+    return {
+      0: 0.45,
+      1: 0.38,
+      2: 0.30,
+      3: 0.25,
+      4: 0.22,
+      5: 0.28,
+      6: 0.52,
+      7: 0.75,
+      8: 0.90,
+      9: 0.88,
+      10: 0.72,
+      11: 0.58,
+    }[month];
+  }
+
+  generateRealisticReservoirLevel(dam, date = new Date()) {
+    const seasonalBase = this._seasonalBaseByState(dam, date);
+    const charValue = dam.id ? dam.id.charCodeAt(0) : 77;
+    const damVariation = ((charValue % 30) - 15) / 100;
+    const dailyNoise = Math.sin(date.getDate() * 0.7) * 0.03;
+
+    const level = Math.max(0.05, Math.min(1.0, seasonalBase + damVariation + dailyNoise));
+    const fullLevel = Number(dam.fullReservoirLevel) || 0;
+    const totalCapacity = Number(dam.totalCapacity || dam.capacity) || 0;
+    const lastYearLevelRatio = Math.max(0, level - 0.05 + Math.random() * 0.1);
+
+    return {
+      currentLevel: +(fullLevel * level).toFixed(2),
+      currentStorage: +(totalCapacity * level).toFixed(2),
+      percentageFull: +(level * 100).toFixed(1),
+      lastYearLevel: +(fullLevel * lastYearLevelRatio).toFixed(2),
+      tenYearAverage: +(fullLevel * (seasonalBase + 0.02)).toFixed(2),
+      lastYearPercentage: +(lastYearLevelRatio * 100).toFixed(1),
+      tenYearAveragePercent: +((seasonalBase + 0.02) * 100).toFixed(1),
+      trend: level > 0.7 ? 'RISING' : level < 0.3 ? 'FALLING' : 'STABLE',
+      status: level >= 0.85 ? 'CRITICAL_HIGH' :
+        level >= 0.70 ? 'HIGH' :
+          level >= 0.40 ? 'NORMAL' :
+            level >= 0.20 ? 'LOW' : 'CRITICAL_LOW',
+      inflow: Math.max(0, (level * totalCapacity * 0.08 + Math.random() * 500)).toFixed(0),
+      outflow: Math.max(0, (level * totalCapacity * 0.06 + Math.random() * 300)).toFixed(0),
+      lastUpdated: new Date().toISOString(),
+      dataSource: 'CWC_SIMULATED',
+    };
+  }
+
+  async fetchIndiaWRISReservoirLevel(dam) {
+    if (!this.wrisEndpoints.length) return null;
+
+    for (const endpoint of this.wrisEndpoints) {
+      try {
+        const response = await this._getWithRetry(endpoint, {
+          timeout: 5000,
+          params: {
+            damId: dam.id,
+            name: dam.name,
+            state: dam.state,
+          },
+          headers: {
+            Accept: 'application/json,text/plain,*/*',
+          },
+        }, 'India WRIS Reservoir');
+
+        const payload = response?.data;
+        const candidate = payload?.data || payload?.result || payload;
+        if (!candidate || typeof candidate !== 'object') continue;
+
+        const percentageFull = Number(candidate.percentageFull || candidate.percentFull || candidate.storage_percent);
+        const currentLevel = Number(candidate.currentLevel || candidate.level_m || candidate.waterLevel);
+        const currentStorage = Number(candidate.currentStorage || candidate.storage_tmc || candidate.storage);
+
+        if (!Number.isFinite(percentageFull) || !Number.isFinite(currentLevel)) continue;
+
+        return {
+          currentLevel: +currentLevel.toFixed(2),
+          currentStorage: Number.isFinite(currentStorage) ? +currentStorage.toFixed(2) : 0,
+          percentageFull: +percentageFull.toFixed(1),
+          lastYearLevel: Number(candidate.lastYearLevel || 0),
+          tenYearAverage: Number(candidate.tenYearAverage || 0),
+          lastYearPercentage: Number(candidate.lastYearPercentage || 0),
+          tenYearAveragePercent: Number(candidate.tenYearAveragePercent || 0),
+          trend: candidate.trend || 'STABLE',
+          status: candidate.status || 'NORMAL',
+          inflow: String(candidate.inflow || 0),
+          outflow: String(candidate.outflow || 0),
+          lastUpdated: candidate.lastUpdated || new Date().toISOString(),
+          dataSource: 'INDIA_WRIS',
+        };
+      } catch (err) {
+        // Continue trying additional endpoints and fallback simulation.
+        console.warn(`[India WRIS] ${endpoint} unavailable: ${this._errorSummary(err)}`);
+      }
+    }
+
+    return null;
   }
 
   /* ================================================================
@@ -605,100 +737,59 @@ class APIService {
   }
 
   /* ================================================================
-   *  7. Reservoir Levels — data-driven estimate (no random)
-   *
-   *  Since India's CWC doesn't expose a free public API, we derive
-   *  reservoir stress from *real* cumulative rainfall + river discharge.
-   *  The formula is deterministic: same inputs → same output.
+   *  7. Reservoir Levels — WRIS live attempt + CWC-style simulation fallback
    * ================================================================ */
   async fetchReservoirLevels(dams) {
-    // Build a cache key from dam IDs so individual and batch calls don't collide
-    const ids = dams.map(d => d.id).sort().join(',');
-    const ck = `reservoir-levels-${ids}`;
-    const c = cache.get(ck); if (c) return c;
+    const now = new Date();
+    const hourStamp = this._hourStamp(now);
 
-    try {
-      const results = await Promise.all(dams.map(async (dam) => {
-        const [hist, flood, soil] = await Promise.all([
-          this.fetchHistoricalRainfall(dam.latitude, dam.longitude, 7),
-          this.fetchRiverDischarge(dam.latitude, dam.longitude),
-          this.fetchSoilMoisture(dam.latitude, dam.longitude),
-        ]);
+    const results = await Promise.all((dams || []).map(async (dam) => {
+      const key = `reservoir_${dam.id}_${hourStamp}`;
+      const cached = cache.get(key);
+      if (cached) return cached;
 
-        const precipArr = hist.daily?.precipitation_sum || [];
-        const cumPrecip = precipArr.reduce((s, v) => s + (v || 0), 0);
+      let reservoir = await this.fetchIndiaWRISReservoirLevel(dam);
+      if (!reservoir) {
+        reservoir = this.generateRealisticReservoirLevel(dam, now);
+      }
 
-        const discharge = flood.stats?.latestDischarge || 0;
-        const avgDischarge = flood.stats?.avgDischarge || 0;
-        const maxDischarge = flood.stats?.maxDischarge || 1;
+      const item = {
+        ...dam,
+        reservoir,
+        // Compatibility fields consumed by existing risk/chart code.
+        currentLevel: reservoir.percentageFull,
+        currentStorage: reservoir.currentStorage,
+        trend: reservoir.trend,
+        status: reservoir.status,
+        inflow: reservoir.inflow,
+        outflow: reservoir.outflow,
+        dataSource: reservoir.dataSource,
+        lastUpdated: reservoir.lastUpdated,
+      };
 
-        const soilM = soil.current?.moisture_0_7cm || soil.avg24h?.moisture_0_7cm || 0;
+      cache.set(key, item, cache.cacheDurations?.reservoir);
+      return item;
+    }));
 
-        // ── Seasonal baseline (India's dam-filling pattern) ──
-        // Indian reservoirs fill Jun-Oct (monsoon) and deplete Nov-May.
-        // CWC reports ~40-55% in Feb (post-monsoon depletion).
-        const month = new Date().getMonth(); // 0-11
-        const seasonalBase = [
-          38, 35, 33, 30, 28, 32,  // Jan-Jun: declining, monsoon starts
-          45, 58, 70, 75, 65, 50   // Jul-Dec: filling, then depleting
-        ][month];
+    return results;
+  }
 
-        // ── Dam-specific variation ──
-        // Use capacity as a proxy: larger reservoirs retain more
-        const capFactor = Math.min(dam.capacity / 100, 1); // 0-1
-        const damVariation = (capFactor * 15) - 7; // -7 to +8 variation
-
-        // ── Live data adjustments ──
-        // Rainfall in last 7 days: each 10mm adds ~1% (up to +15%)
-        const rainAdjust = Math.min(cumPrecip / 10, 15);
-
-        // River discharge relative to max: high flow = filling reservoir
-        const dischRatio = Math.min(discharge / Math.max(maxDischarge, 1), 1);
-        const dischAdjust = dischRatio * 12; // 0-12%
-
-        // Soil moisture: saturated soil → more runoff into reservoir
-        const soilAdjust = Math.min(soilM / 0.4, 1) * 8; // 0-8%
-
-        // Average discharge also contributes (base flow)
-        const avgDischAdjust = Math.min(avgDischarge / 100, 1) * 5; // 0-5%
-
-        const level = Math.max(10, Math.min(
-          seasonalBase + damVariation + rainAdjust + dischAdjust + soilAdjust + avgDischAdjust,
-          98
-        ));
-
-        // Trend from real data: last 3 days vs first 3 days
-        let trend = 'stable';
-        if (precipArr.length >= 6) {
-          const recent = precipArr.slice(-3).reduce((s, v) => s + (v || 0), 0);
-          const earlier = precipArr.slice(0, 3).reduce((s, v) => s + (v || 0), 0);
-          if (recent > earlier * 1.3) trend = 'increasing';
-          else if (recent < earlier * 0.7) trend = 'decreasing';
-        }
-
-        return {
-          id: dam.id,
-          name: dam.name,
-          state: dam.state,
-          river: dam.river,
-          capacity: dam.capacity,
-          currentLevel: +level.toFixed(1),
-          cumulativePrecip7d: +cumPrecip.toFixed(1),
-          riverDischarge: +discharge.toFixed(2),
-          soilMoisture: +soilM.toFixed(4),
-          trend,
-          methodology: 'Seasonal baseline + live rainfall/discharge/soil-moisture adjustments',
-          dataSource: 'Derived from Open-Meteo + GloFAS live data',
-          lastUpdated: new Date().toISOString(),
-        };
-      }));
-
-      cache.set(ck, results);
-      return results;
-    } catch (err) {
-      console.error(`[Reservoir] ${err.message}`);
-      return [];
+  async fetchReservoirHistory(dam, days = 7) {
+    const history = [];
+    for (let i = days - 1; i >= 0; i -= 1) {
+      const date = new Date();
+      date.setDate(date.getDate() - i);
+      const snapshot = this.generateRealisticReservoirLevel(dam, date);
+      history.push({
+        date: date.toISOString().slice(0, 10),
+        percentageFull: snapshot.percentageFull,
+        currentLevel: snapshot.currentLevel,
+        currentStorage: snapshot.currentStorage,
+        trend: snapshot.trend,
+        status: snapshot.status,
+      });
     }
+    return history;
   }
 
   /* ================================================================

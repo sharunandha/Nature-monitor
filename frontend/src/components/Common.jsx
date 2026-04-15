@@ -144,15 +144,17 @@ export const Toast = ({ message, type = 'info', onClose, duration = 5000 }) => {
   }, [onClose, duration]);
 
   return (
-    <div className={`fixed top-4 right-4 z-50 max-w-sm w-full ${colors[type]} border rounded-lg p-4 shadow-lg animate-slideIn`}>
-      <div className="flex justify-between items-start">
-        <p className="text-sm font-medium">{message}</p>
-        <button
-          onClick={onClose}
-          className="ml-4 text-gray-400 hover:text-gray-600"
-        >
-          ×
-        </button>
+    <div className="fixed top-20 left-1/2 -translate-x-1/2 z-50 w-[92vw] max-w-xl pointer-events-none">
+      <div className={`${colors[type]} border rounded-lg p-4 shadow-lg animate-slideIn pointer-events-auto`}>
+        <div className="flex justify-between items-start">
+          <p className="text-sm font-medium">{message}</p>
+          <button
+            onClick={onClose}
+            className="ml-4 text-gray-400 hover:text-gray-600"
+          >
+            ×
+          </button>
+        </div>
       </div>
     </div>
   );

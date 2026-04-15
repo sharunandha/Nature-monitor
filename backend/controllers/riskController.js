@@ -20,12 +20,13 @@ function isSummaryFresh() {
 
 // ── Shared helper: fetch all data + compute risk for one dam ──────
 async function computeDamRisk(dam) {
-  const [weather, historical, soil, flood, quakes] = await Promise.all([
+  const [weather, historical, soil, flood, quakes, reservoirRows] = await Promise.all([
     apiService.fetchRainfallForecast(dam.latitude, dam.longitude),
     apiService.fetchHistoricalRainfall(dam.latitude, dam.longitude, 7),
     apiService.fetchSoilMoisture(dam.latitude, dam.longitude),
     apiService.fetchRiverDischarge(dam.latitude, dam.longitude),
     apiService.fetchEarthquakeData(dam.latitude, dam.longitude, 300),
+    apiService.fetchReservoirLevels([dam]),
   ]);
 
   const precipForecastArr = weather.daily?.precipitation_sum || [];
@@ -36,33 +37,15 @@ async function computeDamRisk(dam) {
   const soilM = soil.current?.moisture_0_7cm || soil.avg24h?.moisture_0_7cm || 0;
   const deepSoilM = soil.current?.moisture_28_100cm || soil.avg24h?.moisture_28_100cm || 0;
 
-  const month = new Date().getMonth();
-  const seasonalBase = [
-    38, 35, 33, 30, 28, 32,
-    45, 58, 70, 75, 65, 50,
-  ][month];
-  const capFactor = Math.min(dam.capacity / 100, 1);
-  const damVariation = (capFactor * 15) - 7;
-  const rainAdjust = Math.min(historicalRainfall / 10, 15);
-  const dischRatio = Math.min(riverDischarge / Math.max(flood.stats?.maxDischarge || 1, 1), 1);
-  const dischAdjust = dischRatio * 12;
-  const soilAdjust = Math.min(soilM / 0.4, 1) * 8;
-  const avgDischAdjust = Math.min((flood.stats?.avgDischarge || 0) / 100, 1) * 5;
-  const reservoirLevel = Math.max(10, Math.min(
-    seasonalBase + damVariation + rainAdjust + dischAdjust + soilAdjust + avgDischAdjust,
-    98
-  ));
+  const reservoir = reservoirRows[0]?.reservoir || null;
+  const reservoirLevel = Number(reservoir?.percentageFull || 0);
 
-  let rainfallTrend = 'stable';
-  if (histPrecipArr.length >= 6) {
-    const recent = histPrecipArr.slice(-3).reduce((s, v) => s + (v || 0), 0);
-    const earlier = histPrecipArr.slice(0, 3).reduce((s, v) => s + (v || 0), 0);
-    if (recent > earlier * 1.3) rainfallTrend = 'increasing';
-    else if (recent < earlier * 0.7) rainfallTrend = 'decreasing';
-  }
+  let rainfallTrend = (reservoir?.trend || 'STABLE').toLowerCase();
+  if (rainfallTrend === 'rising') rainfallTrend = 'increasing';
+  if (rainfallTrend === 'falling') rainfallTrend = 'decreasing';
 
   const floodRisk = riskAnalysisService.calculateFloodRisk({
-    reservoirLevel, forecastRainfall, historicalRainfall, riverDischarge, rainfallTrend,
+    reservoir, reservoirLevel, forecastRainfall, historicalRainfall, riverDischarge, rainfallTrend,
   });
   const landslideRisk = riskAnalysisService.calculateLandslideRisk({
     soilMoisture: soilM,
@@ -77,7 +60,7 @@ async function computeDamRisk(dam) {
     dam, weather, historical, soil, flood, quakes,
     floodRisk, landslideRisk,
     forecastRainfall, historicalRainfall, reservoirLevel,
-    rainfallTrend, riverDischarge, soilM, deepSoilM,
+    rainfallTrend, riverDischarge, soilM, deepSoilM, reservoir,
   };
 }
 
@@ -167,8 +150,11 @@ class RiskController {
       const historicalRainfall = histPrecipArr.reduce((s, v) => s + (v || 0), 0);
 
       const reservoirs = await apiService.fetchReservoirLevels([dam]);
-      const reservoirLevel = reservoirs[0]?.currentLevel || 0;
-      const rainfallTrend = reservoirs[0]?.trend || 'stable';
+      const reservoir = reservoirs[0]?.reservoir || null;
+      const reservoirLevel = Number(reservoir?.percentageFull || reservoirs[0]?.currentLevel || 0);
+      let rainfallTrend = (reservoir?.trend || reservoirs[0]?.trend || 'STABLE').toLowerCase();
+      if (rainfallTrend === 'rising') rainfallTrend = 'increasing';
+      if (rainfallTrend === 'falling') rainfallTrend = 'decreasing';
 
       const riverDischarge = flood.stats?.latestDischarge || 0;
 
@@ -180,6 +166,7 @@ class RiskController {
 
       // Compute flood risk
       const floodRisk = riskAnalysisService.calculateFloodRisk({
+        reservoir,
         reservoirLevel,
         forecastRainfall,
         historicalRainfall,

@@ -24,16 +24,20 @@ class RiskAnalysisService {
    *    4. River discharge (GloFAS)           → 0-20 pts
    *    5. Rainfall trend (increasing?)       → 0-10 pts
    * ================================================================ */
-  calculateFloodRisk({ reservoirLevel, forecastRainfall, historicalRainfall, riverDischarge, rainfallTrend }) {
+  calculateFloodRisk({ reservoir, reservoirLevel, forecastRainfall, historicalRainfall, riverDischarge, rainfallTrend }) {
     let score = 0;
     const factors = [];
+    let landslideBonus = 0;
 
-    // 1. Reservoir / water-level proxy (0-25)
-    const rl = reservoirLevel || 0;
-    if (rl > 85) { score += 25; factors.push(`Critical reservoir level (${rl.toFixed(1)}%)`); }
-    else if (rl > 75) { score += 18; factors.push(`High reservoir level (${rl.toFixed(1)}%)`); }
-    else if (rl > 60) { score += 12; factors.push(`Elevated reservoir level (${rl.toFixed(1)}%)`); }
-    else if (rl > 45) { score += 6; factors.push(`Moderate reservoir level (${rl.toFixed(1)}%)`); }
+    // 1. Reservoir level factor (0-50) from actual fill percentage.
+    const reservoirPct = Number(reservoir?.percentageFull ?? reservoirLevel ?? 0);
+    let reservoirScore = 5;
+    if (reservoirPct >= 90) reservoirScore = 50;
+    else if (reservoirPct >= 85) reservoirScore = 42;
+    else if (reservoirPct >= 75) reservoirScore = 30;
+    else if (reservoirPct >= 60) reservoirScore = 18;
+    score += reservoirScore;
+    factors.push(`Reservoir at ${reservoirPct.toFixed(1)}% (${reservoirScore} pts)`);
 
     // 2. Forecast rainfall — daily max over next 7 days (mm)
     const fr = forecastRainfall || 0;
@@ -60,10 +64,18 @@ class RiskAnalysisService {
     if (rainfallTrend === 'increasing') { score += 10; factors.push('Rainfall trend: increasing'); }
     else if (rainfallTrend === 'stable') { score += 3; factors.push('Rainfall trend: stable'); }
 
+    // Additional trigger: critically low reservoir + sudden heavy rain can destabilize catchments.
+    const rainfallTrigger = Math.max(fr, hr);
+    if (reservoirPct < 20 && rainfallTrigger > 50) {
+      landslideBonus = 15;
+      score += landslideBonus;
+      factors.push('Critical-low storage with sudden heavy rain (+15 catchment instability)');
+    }
+
     const finalScore = Math.min(score, 100);
     const level = finalScore >= 70 ? 'HIGH' : finalScore >= 40 ? 'MEDIUM' : 'LOW';
 
-    return { score: finalScore, level, factors, timestamp: new Date().toISOString() };
+    return { score: finalScore, level, factors, landslideBonus, reservoirPct, timestamp: new Date().toISOString() };
   }
 
   /* ================================================================

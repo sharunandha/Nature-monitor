@@ -1,5 +1,6 @@
 import React from 'react';
 import { InfoCard } from './Common';
+import { StateReservoirSummaryChart } from './Charts';
 import { dataAPI } from '../services/api';
 
 export const EmergencyContacts = () => {
@@ -121,12 +122,15 @@ export const Dashboard = ({
   risks,
   alerts,
   advancedRiskData,
+  reservoirStates = [],
   onEmergencyContacts,
   onDetailedReport,
   onSetNotifications,
   onEmergencyProtocol
 }) => {
   const highRiskCount = risks?.filter(r => r.floodRisk === 'HIGH' || r.landslideRisk === 'HIGH').length || 0;
+  const criticalHighReservoirs = risks?.filter(r => Number(r.environmentalSummary?.reservoirLevel || 0) >= 85).length || 0;
+  const criticalLowReservoirs = risks?.filter(r => Number(r.environmentalSummary?.reservoirLevel || 0) < 20).length || 0;
 
   return (
     <div className="space-y-4 md:space-y-6">
@@ -276,7 +280,7 @@ export const Dashboard = ({
       <div className="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-4 gap-2 md:gap-4">
         <InfoCard
           icon="🗺️"
-          title="Monitored Dams"
+          title="Total Dams"
           value={totalDams}
           color="blue"
           className="animate-slideUp hover-lift animate-glow"
@@ -291,13 +295,32 @@ export const Dashboard = ({
           style={{ animationDelay: '0.2s' }}
         />
         <InfoCard
+          icon="🚨"
+          title="Reservoirs Critical High"
+          value={criticalHighReservoirs}
+          color={criticalHighReservoirs > 0 ? 'red' : 'green'}
+          className="animate-slideUp hover-lift animate-glow"
+          style={{ animationDelay: '0.3s' }}
+        />
+        <InfoCard
+          icon="🟠"
+          title="Reservoirs Critical Low"
+          value={criticalLowReservoirs}
+          color={criticalLowReservoirs > 0 ? 'amber' : 'green'}
+          className="animate-slideUp hover-lift animate-glow"
+          style={{ animationDelay: '0.4s' }}
+        />
+      </div>
+
+      <div className="grid grid-cols-2 md:grid-cols-2 lg:grid-cols-4 gap-2 md:gap-4">
+        <InfoCard
           icon="💧"
           title="Avg Rainfall"
           value={avgRainfall?.toFixed(1)}
           unit="mm"
           color="blue"
           className="animate-slideUp hover-lift animate-glow"
-          style={{ animationDelay: '0.3s' }}
+          style={{ animationDelay: '0.1s' }}
         />
         <InfoCard
           icon="📍"
@@ -305,8 +328,53 @@ export const Dashboard = ({
           value={earthquakesLast24h}
           color="amber"
           className="animate-slideUp hover-lift animate-glow"
-          style={{ animationDelay: '0.4s' }}
+          style={{ animationDelay: '0.2s' }}
         />
+      </div>
+
+      <div className="bg-white border border-gray-200 rounded-lg p-4 md:p-6 shadow-sm">
+        <div className="flex items-center justify-between mb-3">
+          <h3 className="text-lg font-bold text-gray-900">State-wise Reservoir Summary</h3>
+          <span className="text-xs text-gray-500">All dams grouped by state</span>
+        </div>
+
+        <div className="overflow-auto max-h-72">
+          <table className="w-full text-sm min-w-[650px]">
+            <thead>
+              <tr className="text-left border-b border-gray-200 text-gray-600">
+                <th className="py-2">State</th>
+                <th className="py-2">Dams</th>
+                <th className="py-2">Average % Full</th>
+                <th className="py-2">Status</th>
+              </tr>
+            </thead>
+            <tbody>
+              {reservoirStates.map((state) => {
+                const avg = Number(state.avgFillPercent || 0);
+                const status = avg >= 85 ? 'CRITICAL_HIGH' : avg >= 70 ? 'HIGH' : avg >= 40 ? 'NORMAL' : avg >= 20 ? 'LOW' : 'CRITICAL_LOW';
+                const statusClass = status === 'CRITICAL_HIGH' ? 'bg-red-100 text-red-700' :
+                  status === 'HIGH' ? 'bg-orange-100 text-orange-700' :
+                    status === 'NORMAL' ? 'bg-green-100 text-green-700' :
+                      status === 'LOW' ? 'bg-yellow-100 text-yellow-700' : 'bg-blue-100 text-blue-700';
+
+                return (
+                  <tr key={state.name} className="border-b border-gray-100">
+                    <td className="py-2 font-medium text-gray-900">{state.name}</td>
+                    <td className="py-2 text-gray-700">{state.damCount}</td>
+                    <td className="py-2 text-gray-700">{avg.toFixed(1)}%</td>
+                    <td className="py-2">
+                      <span className={`px-2 py-1 rounded-full text-xs font-semibold ${statusClass}`}>{status}</span>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="mt-4">
+          <StateReservoirSummaryChart states={reservoirStates} />
+        </div>
       </div>
 
       {/* Quick Stats */}

@@ -269,6 +269,140 @@ export const ReservoirChart = ({ reservoirs }) => {
   );
 };
 
+export const ReservoirTopDamsChart = ({ dams }) => {
+  const list = (dams || [])
+    .map((dam) => ({
+      name: dam.name,
+      state: dam.state,
+      pct: Number(dam.reservoir?.percentageFull ?? dam.currentLevel ?? 0),
+      status: dam.reservoir?.status || dam.status || 'NORMAL',
+    }))
+    .sort((a, b) => b.pct - a.pct)
+    .slice(0, 20);
+
+  if (!list.length) {
+    return <div className="text-gray-500 text-center py-8">No reservoir data available</div>;
+  }
+
+  const statusColor = (status) => {
+    if (status === 'CRITICAL_HIGH') return '#dc2626';
+    if (status === 'HIGH') return '#f97316';
+    if (status === 'NORMAL') return '#16a34a';
+    if (status === 'LOW') return '#eab308';
+    return '#1d4ed8';
+  };
+
+  const chartData = {
+    labels: list.map(d => `${d.name} (${d.state})`),
+    datasets: [
+      {
+        label: '% Full',
+        data: list.map(d => d.pct),
+        backgroundColor: list.map(d => statusColor(d.status)),
+        borderWidth: 0,
+        borderRadius: 6,
+      },
+    ],
+  };
+
+  const options = {
+    responsive: true,
+    maintainAspectRatio: false,
+    indexAxis: 'y',
+    plugins: {
+      legend: { display: false },
+      title: {
+        display: true,
+        text: 'Top 20 Dams by Reservoir Fill %',
+        color: '#374151',
+      },
+    },
+    scales: {
+      x: {
+        min: 0,
+        max: 100,
+        ticks: {
+          color: '#6b7280',
+          callback: (v) => `${v}%`,
+        },
+      },
+      y: {
+        ticks: { color: '#374151', font: { size: 11 } },
+      },
+    },
+  };
+
+  return (
+    <div style={{ height: '620px' }}>
+      <Bar data={chartData} options={options} />
+    </div>
+  );
+};
+
+export const StateReservoirSummaryChart = ({ states }) => {
+  const list = (states || []).slice().sort((a, b) => a.name.localeCompare(b.name));
+  if (!list.length) {
+    return <div className="text-gray-500 text-center py-8">No state summary data</div>;
+  }
+
+  const chartData = {
+    labels: list.map(s => s.name),
+    datasets: [
+      {
+        label: 'Current Avg %',
+        data: list.map(s => Number(s.avgFillPercent || 0)),
+        backgroundColor: '#2563eb',
+      },
+      {
+        label: 'Last Year Avg %',
+        data: list.map(s => Number(s.avgLastYearPercent || 0)),
+        backgroundColor: '#10b981',
+      },
+      {
+        label: '10-Year Avg %',
+        data: list.map(s => Number(s.avgTenYearPercent || 0)),
+        backgroundColor: '#f59e0b',
+      },
+    ],
+  };
+
+  const options = {
+    responsive: true,
+    maintainAspectRatio: false,
+    plugins: {
+      legend: { position: 'top' },
+      title: {
+        display: true,
+        text: 'State-wise Reservoir Comparison',
+        color: '#374151',
+      },
+    },
+    scales: {
+      x: {
+        ticks: {
+          color: '#374151',
+          maxRotation: 80,
+          minRotation: 55,
+        },
+      },
+      y: {
+        min: 0,
+        max: 100,
+        ticks: {
+          color: '#6b7280',
+          callback: (v) => `${v}%`,
+        },
+      },
+    },
+  };
+
+  return (
+    <div style={{ height: '480px' }}>
+      <Bar data={chartData} options={options} />
+    </div>
+  );
+};
+
 export const HistoricalComparisonChart = ({ currentData, historicalData }) => {
   if (!currentData || !historicalData) {
     return <div className="text-gray-500 text-center py-8">No historical data available for comparison</div>;
