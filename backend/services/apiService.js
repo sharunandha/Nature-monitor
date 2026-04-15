@@ -47,6 +47,10 @@ class APIService {
       news: 0,
       usgsWater: 0,
     };
+
+    // Open-Meteo rate-limit protection: 429 cooldown + request deduplication
+    this.openMeteo429CooldownUntil = 0;
+    this.pendingRequests = new Map();
   }
 
   _hourStamp(date = new Date()) {
@@ -482,43 +486,72 @@ class APIService {
     const ck = `weather-fc-${latitude}-${longitude}`;
     const c = cache.get(ck); if (c) return c;
 
-    try {
-      const res = await this._getWithRetry(`${this.openMeteoBase}/forecast`, {
-        timeout: this.timeout,
-        params: {
-          latitude, longitude,
-          daily: 'precipitation_sum,rain_sum,precipitation_probability_max,temperature_2m_max,temperature_2m_min,windspeed_10m_max',
-          hourly: 'precipitation,precipitation_probability,relative_humidity_2m,soil_moisture_0_to_1cm',
-          forecast_days: 7,
-          timezone: 'Asia/Kolkata',
-        },
-      }, 'Open-Meteo Forecast');
-      const data = {
-        location: { latitude, longitude },
-        daily: res.data.daily,
-        hourly: res.data.hourly,
-        source: 'Open-Meteo Forecast API (live)',
-        timestamp: new Date().toISOString(),
-      };
-      cache.set(ck, data);
-      return data;
-    } catch (err) {
-      const msg = this._errorSummary(err);
-      console.error(`[Open-Meteo Forecast] ${msg}`);
+    // If Open-Meteo is in 429 rate-limit cooldown, return synthetic fallback immediately
+    if (Date.now() < this.openMeteo429CooldownUntil) {
+      const synthetic = this._fallbackRainfallForecast(latitude, longitude, 7);
+      synthetic.error = 'Open-Meteo rate-limit cooldown active';
+      cache.set(ck, synthetic, 6 * 60 * 60 * 1000);
+      return synthetic;
+    }
 
-      // Fallback provider for rainfall forecast (no API key required)
+    // Deduplication: if this location is already being requested, wait for existing request
+    const pendingKey = `forecast-${latitude}-${longitude}`;
+    if (this.pendingRequests.has(pendingKey)) {
+      return this.pendingRequests.get(pendingKey);
+    }
+
+    const promise = (async () => {
       try {
-        const fallback = await this._fetchMetNoRainfallForecast(latitude, longitude, 7);
-        cache.set(ck, fallback);
-        return fallback;
-      } catch (fallbackErr) {
-        const fallbackMsg = this._errorSummary(fallbackErr);
-        console.error(`[met.no Rain Forecast] ${fallbackMsg}`);
-        const synthetic = this._fallbackRainfallForecast(latitude, longitude, 7);
-        synthetic.error = `${msg} | fallback_failed=${fallbackMsg}`;
-        cache.set(ck, synthetic, cache.cacheDurations?.rainfall);
-        return synthetic;
+        const res = await this._getWithRetry(`${this.openMeteoBase}/forecast`, {
+          timeout: this.timeout,
+          params: {
+            latitude, longitude,
+            daily: 'precipitation_sum,rain_sum,precipitation_probability_max,temperature_2m_max,temperature_2m_min,windspeed_10m_max',
+            hourly: 'precipitation,precipitation_probability,relative_humidity_2m,soil_moisture_0_to_1cm',
+            forecast_days: 7,
+            timezone: 'Asia/Kolkata',
+          },
+        }, 'Open-Meteo Forecast');
+        const data = {
+          location: { latitude, longitude },
+          daily: res.data.daily,
+          hourly: res.data.hourly,
+          source: 'Open-Meteo Forecast API (live)',
+          timestamp: new Date().toISOString(),
+        };
+        cache.set(ck, data, 6 * 60 * 60 * 1000);
+        return data;
+      } catch (err) {
+        const msg = this._errorSummary(err);
+        const status = err?.response?.status;
+        console.error(`[Open-Meteo Forecast] ${msg}`);
+
+        // Aggressive cooldown on 429
+        if (status === 429) {
+          this.openMeteo429CooldownUntil = Date.now() + (24 * 60 * 60 * 1000);
+        }
+
+        // Fallback provider for rainfall forecast (no API key required)
+        try {
+          const fallback = await this._fetchMetNoRainfallForecast(latitude, longitude, 7);
+          cache.set(ck, fallback, 6 * 60 * 60 * 1000);
+          return fallback;
+        } catch (fallbackErr) {
+          const fallbackMsg = this._errorSummary(fallbackErr);
+          console.error(`[met.no Rain Forecast] ${fallbackMsg}`);
+          const synthetic = this._fallbackRainfallForecast(latitude, longitude, 7);
+          synthetic.error = `${msg} | fallback_failed=${fallbackMsg}`;
+          cache.set(ck, synthetic, 6 * 60 * 60 * 1000);
+          return synthetic;
+        }
       }
+    })();
+
+    this.pendingRequests.set(pendingKey, promise);
+    try {
+      return await promise;
+    } finally {
+      this.pendingRequests.delete(pendingKey);
     }
   }
 
@@ -528,6 +561,17 @@ class APIService {
   async fetchLiveWeather(latitude, longitude) {
     const ck = `live-weather-${latitude}-${longitude}`;
     const c = cache.get(ck); if (c) return c;
+
+    // If Open-Meteo is in 429 rate-limit cooldown, return fallback immediately
+    if (Date.now() < this.openMeteo429CooldownUntil) {
+      return {
+        error: 'Open-Meteo rate-limit cooldown active',
+        location: { latitude, longitude },
+        current: null,
+        source: 'Unavailable',
+        timestamp: new Date().toISOString(),
+      };
+    }
 
     try {
       const openMeteoResponse = await this._getWithRetry(`${this.openMeteoBase}/forecast`, {
@@ -599,7 +643,13 @@ class APIService {
       return data;
     } catch (err) {
       const msg = this._errorSummary(err);
+      const status = err?.response?.status;
       console.error(`[Live Weather] ${msg}`);
+
+      // Aggressive cooldown on 429
+      if (status === 429) {
+        this.openMeteo429CooldownUntil = Date.now() + (24 * 60 * 60 * 1000);
+      }
 
       // Fallback provider: met.no (no API key required)
       try {
@@ -628,37 +678,67 @@ class APIService {
     const ck = `hist-rain-${latitude}-${longitude}-${days}`;
     const c = cache.get(ck); if (c) return c;
 
-    try {
-      const endDate = this._dateFmt(this._daysAgo(1));
-      const startDate = this._dateFmt(this._daysAgo(days));
-
-      const res = await this._getWithRetry(`${this.openMeteoBase}/forecast`, {
-        timeout: this.timeout,
-        params: {
-          latitude, longitude,
-          daily: 'precipitation_sum,rain_sum',
-          start_date: startDate,
-          end_date: endDate,
-          timezone: 'Asia/Kolkata',
-        },
-      }, 'Open-Meteo History');
-
-      const data = {
-        location: { latitude, longitude },
-        period: { startDate, endDate },
-        daily: res.data.daily,
-        source: 'Open-Meteo Historical (live)',
-        timestamp: new Date().toISOString(),
-      };
-      cache.set(ck, data);
-      return data;
-    } catch (err) {
-      const msg = this._errorSummary(err);
-      console.error(`[Open-Meteo History] ${msg}`);
+    // If Open-Meteo is in 429 rate-limit cooldown, return synthetic fallback immediately
+    if (Date.now() < this.openMeteo429CooldownUntil) {
       const synthetic = this._fallbackHistoricalRainfall(latitude, longitude, days);
-      synthetic.error = msg;
-      cache.set(ck, synthetic, cache.cacheDurations?.rainfall);
+      synthetic.error = 'Open-Meteo rate-limit cooldown active';
+      cache.set(ck, synthetic, 6 * 60 * 60 * 1000);
       return synthetic;
+    }
+
+    // Deduplication: if this location is already being requested, wait for existing request
+    const pendingKey = `history-${latitude}-${longitude}-${days}`;
+    if (this.pendingRequests.has(pendingKey)) {
+      return this.pendingRequests.get(pendingKey);
+    }
+
+    const promise = (async () => {
+      try {
+        const endDate = this._dateFmt(this._daysAgo(1));
+        const startDate = this._dateFmt(this._daysAgo(days));
+
+        const res = await this._getWithRetry(`${this.openMeteoBase}/forecast`, {
+          timeout: this.timeout,
+          params: {
+            latitude, longitude,
+            daily: 'precipitation_sum,rain_sum',
+            start_date: startDate,
+            end_date: endDate,
+            timezone: 'Asia/Kolkata',
+          },
+        }, 'Open-Meteo History');
+
+        const data = {
+          location: { latitude, longitude },
+          period: { startDate, endDate },
+          daily: res.data.daily,
+          source: 'Open-Meteo Historical (live)',
+          timestamp: new Date().toISOString(),
+        };
+        cache.set(ck, data, 6 * 60 * 60 * 1000);
+        return data;
+      } catch (err) {
+        const msg = this._errorSummary(err);
+        const status = err?.response?.status;
+        console.error(`[Open-Meteo History] ${msg}`);
+
+        // Aggressive cooldown on 429
+        if (status === 429) {
+          this.openMeteo429CooldownUntil = Date.now() + (24 * 60 * 60 * 1000);
+        }
+
+        const synthetic = this._fallbackHistoricalRainfall(latitude, longitude, days);
+        synthetic.error = msg;
+        cache.set(ck, synthetic, 6 * 60 * 60 * 1000);
+        return synthetic;
+      }
+    })();
+
+    this.pendingRequests.set(pendingKey, promise);
+    try {
+      return await promise;
+    } finally {
+      this.pendingRequests.delete(pendingKey);
     }
   }
 
@@ -669,75 +749,105 @@ class APIService {
     const ck = `soil-${latitude}-${longitude}`;
     const c = cache.get(ck); if (c) return c;
 
-    try {
-      // Use correct Open-Meteo variable names for soil moisture depths
-      const res = await this._getWithRetry(`${this.openMeteoBase}/forecast`, {
-        timeout: this.timeout,
-        params: {
-          latitude, longitude,
-          hourly: 'soil_moisture_0_to_1cm,soil_moisture_1_to_3cm,soil_moisture_3_to_9cm,soil_moisture_9_to_27cm,soil_moisture_27_to_81cm,soil_temperature_0cm',
-          past_days: 2,
-          forecast_days: 1,
-          timezone: 'Asia/Kolkata',
-        },
-      }, 'Open-Meteo Soil');
-
-      const h = res.data.hourly;
-
-      // Find the latest NON-NULL value (forecast hours may be null)
-      const latestNonNull = (arr) => {
-        if (!arr) return 0;
-        for (let i = arr.length - 1; i >= 0; i--) {
-          if (arr[i] !== null && arr[i] !== undefined && !isNaN(arr[i])) return arr[i];
-        }
-        return 0;
-      };
-
-      // Average only valid (non-null) values from the past hours
-      const validAvg = (arr) => {
-        if (!arr) return 0;
-        const valid = arr.filter(x => x !== null && x !== undefined && !isNaN(x));
-        return valid.length ? +(valid.reduce((a, b) => a + b, 0) / valid.length).toFixed(4) : 0;
-      };
-
-      // Surface = average of 0-1cm and 1-3cm (top soil)
-      const surface0 = latestNonNull(h.soil_moisture_0_to_1cm);
-      const surface1 = latestNonNull(h.soil_moisture_1_to_3cm);
-      const surfaceMoisture = +(((surface0 + surface1) / 2) || surface0).toFixed(4);
-
-      // Mid-depth = average of 3-9cm and 9-27cm
-      const mid0 = latestNonNull(h.soil_moisture_3_to_9cm);
-      const mid1 = latestNonNull(h.soil_moisture_9_to_27cm);
-      const midMoisture = +(((mid0 + mid1) / 2) || mid0).toFixed(4);
-
-      // Deep = 27-81cm
-      const deepMoisture = latestNonNull(h.soil_moisture_27_to_81cm);
-
-      const data = {
-        location: { latitude, longitude },
-        current: {
-          moisture_0_7cm: surfaceMoisture,   // Surface soil moisture (m³/m³)
-          moisture_7_28cm: midMoisture,       // Mid-depth soil moisture
-          moisture_28_100cm: +deepMoisture.toFixed(4),  // Deep soil moisture
-          temperature_0_7cm: latestNonNull(h.soil_temperature_0cm),
-        },
-        avg24h: {
-          moisture_0_7cm: validAvg(h.soil_moisture_0_to_1cm),
-          moisture_7_28cm: validAvg(h.soil_moisture_9_to_27cm),
-          moisture_28_100cm: validAvg(h.soil_moisture_27_to_81cm),
-        },
-        source: 'Open-Meteo Land-Surface Model (live)',
-        timestamp: new Date().toISOString(),
-      };
-      cache.set(ck, data);
-      return data;
-    } catch (err) {
-      const msg = this._errorSummary(err);
-      console.error(`[Open-Meteo Soil] ${msg}`);
+    // If Open-Meteo is in 429 rate-limit cooldown, return synthetic fallback immediately
+    if (Date.now() < this.openMeteo429CooldownUntil) {
       const synthetic = this._fallbackSoilMoisture(latitude, longitude);
-      synthetic.error = msg;
-      cache.set(ck, synthetic, cache.cacheDurations?.rainfall);
+      synthetic.error = 'Open-Meteo rate-limit cooldown active';
+      cache.set(ck, synthetic, 6 * 60 * 60 * 1000);
       return synthetic;
+    }
+
+    // Deduplication: if this location is already being requested, wait for existing request
+    const pendingKey = `soil-${latitude}-${longitude}`;
+    if (this.pendingRequests.has(pendingKey)) {
+      return this.pendingRequests.get(pendingKey);
+    }
+
+    const promise = (async () => {
+      try {
+        // Use correct Open-Meteo variable names for soil moisture depths
+        const res = await this._getWithRetry(`${this.openMeteoBase}/forecast`, {
+          timeout: this.timeout,
+          params: {
+            latitude, longitude,
+            hourly: 'soil_moisture_0_to_1cm,soil_moisture_1_to_3cm,soil_moisture_3_to_9cm,soil_moisture_9_to_27cm,soil_moisture_27_to_81cm,soil_temperature_0cm',
+            past_days: 2,
+            forecast_days: 1,
+            timezone: 'Asia/Kolkata',
+          },
+        }, 'Open-Meteo Soil');
+
+        const h = res.data.hourly;
+
+        // Find the latest NON-NULL value (forecast hours may be null)
+        const latestNonNull = (arr) => {
+          if (!arr) return 0;
+          for (let i = arr.length - 1; i >= 0; i--) {
+            if (arr[i] !== null && arr[i] !== undefined && !isNaN(arr[i])) return arr[i];
+          }
+          return 0;
+        };
+
+        // Average only valid (non-null) values from the past hours
+        const validAvg = (arr) => {
+          if (!arr) return 0;
+          const valid = arr.filter(x => x !== null && x !== undefined && !isNaN(x));
+          return valid.length ? +(valid.reduce((a, b) => a + b, 0) / valid.length).toFixed(4) : 0;
+        };
+
+        // Surface = average of 0-1cm and 1-3cm (top soil)
+        const surface0 = latestNonNull(h.soil_moisture_0_to_1cm);
+        const surface1 = latestNonNull(h.soil_moisture_1_to_3cm);
+        const surfaceMoisture = +(((surface0 + surface1) / 2) || surface0).toFixed(4);
+
+        // Mid-depth = average of 3-9cm and 9-27cm
+        const mid0 = latestNonNull(h.soil_moisture_3_to_9cm);
+        const mid1 = latestNonNull(h.soil_moisture_9_to_27cm);
+        const midMoisture = +(((mid0 + mid1) / 2) || mid0).toFixed(4);
+
+        // Deep = 27-81cm
+        const deepMoisture = latestNonNull(h.soil_moisture_27_to_81cm);
+
+        const data = {
+          location: { latitude, longitude },
+          current: {
+            moisture_0_7cm: surfaceMoisture,   // Surface soil moisture (m³/m³)
+            moisture_7_28cm: midMoisture,       // Mid-depth soil moisture
+            moisture_28_100cm: +deepMoisture.toFixed(4),  // Deep soil moisture
+            temperature_0_7cm: latestNonNull(h.soil_temperature_0cm),
+          },
+          avg24h: {
+            moisture_0_7cm: validAvg(h.soil_moisture_0_to_1cm),
+            moisture_7_28cm: validAvg(h.soil_moisture_9_to_27cm),
+            moisture_28_100cm: validAvg(h.soil_moisture_27_to_81cm),
+          },
+          source: 'Open-Meteo Land-Surface Model (live)',
+          timestamp: new Date().toISOString(),
+        };
+        cache.set(ck, data, 6 * 60 * 60 * 1000);
+        return data;
+      } catch (err) {
+        const msg = this._errorSummary(err);
+        const status = err?.response?.status;
+        console.error(`[Open-Meteo Soil] ${msg}`);
+
+        // Aggressive cooldown on 429
+        if (status === 429) {
+          this.openMeteo429CooldownUntil = Date.now() + (24 * 60 * 60 * 1000);
+        }
+
+        const synthetic = this._fallbackSoilMoisture(latitude, longitude);
+        synthetic.error = msg;
+        cache.set(ck, synthetic, 6 * 60 * 60 * 1000);
+        return synthetic;
+      }
+    })();
+
+    this.pendingRequests.set(pendingKey, promise);
+    try {
+      return await promise;
+    } finally {
+      this.pendingRequests.delete(pendingKey);
     }
   }
 
@@ -748,38 +858,68 @@ class APIService {
     const ck = `flood-${latitude}-${longitude}`;
     const c = cache.get(ck); if (c) return c;
 
-    try {
-      const res = await this._getWithRetry(this.openMeteoFlood, {
-        timeout: this.timeout,
-        params: {
-          latitude, longitude,
-          daily: 'river_discharge',
-          forecast_days: 7,
-        },
-      }, 'GloFAS Flood');
-
-      const daily = res.data.daily || {};
-      const vals = (daily.river_discharge || []).filter(v => v !== null);
-      const maxD = vals.length ? Math.max(...vals) : 0;
-      const avgD = this._avg(vals);
-      const latestD = vals.length ? vals[vals.length - 1] : 0;
-
-      const data = {
-        location: { latitude, longitude },
-        daily,
-        stats: { maxDischarge: +maxD.toFixed(2), avgDischarge: +avgD.toFixed(2), latestDischarge: +latestD.toFixed(2) },
-        source: 'Open-Meteo GloFAS Flood API (live)',
-        timestamp: new Date().toISOString(),
-      };
-      cache.set(ck, data);
-      return data;
-    } catch (err) {
-      const msg = this._errorSummary(err);
-      console.error(`[GloFAS Flood] ${msg}`);
+    // If Open-Meteo is in 429 rate-limit cooldown, return synthetic fallback immediately
+    if (Date.now() < this.openMeteo429CooldownUntil) {
       const synthetic = this._fallbackRiverDischarge(latitude, longitude);
-      synthetic.error = msg;
-      cache.set(ck, synthetic, cache.cacheDurations?.rainfall);
+      synthetic.error = 'Open-Meteo rate-limit cooldown active';
+      cache.set(ck, synthetic, 6 * 60 * 60 * 1000);
       return synthetic;
+    }
+
+    // Deduplication: if this location is already being requested, wait for existing request
+    const pendingKey = `discharge-${latitude}-${longitude}`;
+    if (this.pendingRequests.has(pendingKey)) {
+      return this.pendingRequests.get(pendingKey);
+    }
+
+    const promise = (async () => {
+      try {
+        const res = await this._getWithRetry(this.openMeteoFlood, {
+          timeout: this.timeout,
+          params: {
+            latitude, longitude,
+            daily: 'river_discharge',
+            forecast_days: 7,
+          },
+        }, 'GloFAS Flood');
+
+        const daily = res.data.daily || {};
+        const vals = (daily.river_discharge || []).filter(v => v !== null);
+        const maxD = vals.length ? Math.max(...vals) : 0;
+        const avgD = this._avg(vals);
+        const latestD = vals.length ? vals[vals.length - 1] : 0;
+
+        const data = {
+          location: { latitude, longitude },
+          daily,
+          stats: { maxDischarge: +maxD.toFixed(2), avgDischarge: +avgD.toFixed(2), latestDischarge: +latestD.toFixed(2) },
+          source: 'Open-Meteo GloFAS Flood API (live)',
+          timestamp: new Date().toISOString(),
+        };
+        cache.set(ck, data, 6 * 60 * 60 * 1000);
+        return data;
+      } catch (err) {
+        const msg = this._errorSummary(err);
+        const status = err?.response?.status;
+        console.error(`[GloFAS Flood] ${msg}`);
+
+        // Aggressive cooldown on 429
+        if (status === 429) {
+          this.openMeteo429CooldownUntil = Date.now() + (24 * 60 * 60 * 1000);
+        }
+
+        const synthetic = this._fallbackRiverDischarge(latitude, longitude);
+        synthetic.error = msg;
+        cache.set(ck, synthetic, 6 * 60 * 60 * 1000);
+        return synthetic;
+      }
+    })();
+
+    this.pendingRequests.set(pendingKey, promise);
+    try {
+      return await promise;
+    } finally {
+      this.pendingRequests.delete(pendingKey);
     }
   }
 
