@@ -40,6 +40,13 @@ class APIService {
     this.weatherApiKey = process.env.WEATHERAPI_KEY || 'demo_key';
     this.newsApiKey = process.env.NEWSAPI_KEY || 'demo_key';
     this.sentinelHubKey = process.env.SENTINEL_HUB_KEY || 'demo_key';
+    this.enableUSGSWater = process.env.ENABLE_USGS_WATER === 'true';
+
+    this.optionalApiCooldownUntil = {
+      weather: 0,
+      news: 0,
+      usgsWater: 0,
+    };
   }
 
   _hourStamp(date = new Date()) {
@@ -956,12 +963,26 @@ class APIService {
     return { weather, historical, soil, flood, nasa, quakes, weatherApi, sentinel, news };
   }
 
+  _optionalUnavailable(tag, extra = {}) {
+    return { error: `${tag} unavailable`, ...extra };
+  }
+
   /* ================================================================
    *  9. WeatherAPI — Detailed weather conditions
    * ================================================================ */
   async fetchWeatherAPI(latitude, longitude) {
     const ck = `weatherapi-${latitude}-${longitude}`;
     const c = cache.get(ck); if (c) return c;
+
+    if (!this.weatherApiKey || this.weatherApiKey === 'demo_key') {
+      const unavailable = this._optionalUnavailable('WeatherAPI', { location: { latitude, longitude }, current: null });
+      cache.set(ck, unavailable, 60 * 60 * 1000);
+      return unavailable;
+    }
+
+    if (Date.now() < this.optionalApiCooldownUntil.weather) {
+      return this._optionalUnavailable('WeatherAPI cooldown', { location: { latitude, longitude }, current: null });
+    }
 
     try {
       const response = await axios.get(`${this.weatherApiBase}/current.json`, {
@@ -994,6 +1015,10 @@ class APIService {
       cache.set(ck, data, 1800000); // 30 min cache
       return data;
     } catch (err) {
+      const status = err?.response?.status;
+      if (status === 401 || status === 403 || status === 429) {
+        this.optionalApiCooldownUntil.weather = Date.now() + (6 * 60 * 60 * 1000);
+      }
       console.error(`[WeatherAPI] ${err.message}`);
       return { error: err.message, location: { latitude, longitude }, current: null };
     }
@@ -1005,6 +1030,16 @@ class APIService {
   async fetchUSGSWaterData(latitude, longitude, radiusKm = 50) {
     const ck = `usgs-water-${latitude}-${longitude}-${radiusKm}`;
     const c = cache.get(ck); if (c) return c;
+
+    if (!this.enableUSGSWater) {
+      const unavailable = this._optionalUnavailable('USGS Water', { location: { latitude, longitude }, sites: [] });
+      cache.set(ck, unavailable, 60 * 60 * 1000);
+      return unavailable;
+    }
+
+    if (Date.now() < this.optionalApiCooldownUntil.usgsWater) {
+      return this._optionalUnavailable('USGS Water cooldown', { location: { latitude, longitude }, sites: [] });
+    }
 
     try {
       // Convert lat/lng to bounding box
@@ -1047,6 +1082,10 @@ class APIService {
       cache.set(ck, data, 3600000); // 1 hour cache
       return data;
     } catch (err) {
+      const status = err?.response?.status;
+      if (status === 400 || status === 401 || status === 403 || status === 429) {
+        this.optionalApiCooldownUntil.usgsWater = Date.now() + (6 * 60 * 60 * 1000);
+      }
       console.error(`[USGS Water] ${err.message}`);
       return { error: err.message, location: { latitude, longitude }, sites: [] };
     }
@@ -1058,6 +1097,16 @@ class APIService {
   async fetchDisasterNews(state, daysBack = 7) {
     const ck = `news-${state}-${daysBack}`;
     const c = cache.get(ck); if (c) return c;
+
+    if (!this.newsApiKey || this.newsApiKey === 'demo_key') {
+      const unavailable = this._optionalUnavailable('NewsAPI', { state, disasterArticles: 0, recentDisasters: [] });
+      cache.set(ck, unavailable, 60 * 60 * 1000);
+      return unavailable;
+    }
+
+    if (Date.now() < this.optionalApiCooldownUntil.news) {
+      return this._optionalUnavailable('NewsAPI cooldown', { state, disasterArticles: 0, recentDisasters: [] });
+    }
 
     try {
       const fromDate = new Date();
@@ -1103,6 +1152,10 @@ class APIService {
       cache.set(ck, data, 1800000); // 30 min cache
       return data;
     } catch (err) {
+      const status = err?.response?.status;
+      if (status === 401 || status === 403 || status === 429) {
+        this.optionalApiCooldownUntil.news = Date.now() + (6 * 60 * 60 * 1000);
+      }
       console.error(`[NewsAPI] ${err.message}`);
       return { error: err.message, state, disasterArticles: 0, recentDisasters: [] };
     }

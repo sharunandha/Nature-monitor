@@ -5,6 +5,21 @@ const { damLocations } = require('../utils/damLocations');
  * Data Controller — all endpoints return 100% live data.
  */
 class DataController {
+  constructor() {
+    this.getRainfallData = this.getRainfallData.bind(this);
+    this.getEarthquakeData = this.getEarthquakeData.bind(this);
+    this.getReservoirLevels = this.getReservoirLevels.bind(this);
+    this.getReservoirLevelByDam = this.getReservoirLevelByDam.bind(this);
+    this.getReservoirLevelsByState = this.getReservoirLevelsByState.bind(this);
+    this.getDamsByState = this.getDamsByState.bind(this);
+    this.getStates = this.getStates.bind(this);
+    this.getDamLocations = this.getDamLocations.bind(this);
+    this.getSoilMoisture = this.getSoilMoisture.bind(this);
+    this.getRiverDischarge = this.getRiverDischarge.bind(this);
+    this.getLiveWeatherData = this.getLiveWeatherData.bind(this);
+    this.getAllEnvironmentalData = this.getAllEnvironmentalData.bind(this);
+    this.getAdvancedRiskAnalysis = this.getAdvancedRiskAnalysis.bind(this);
+  }
 
   _normalizeState(value = '') {
     return decodeURIComponent(String(value)).trim().toLowerCase();

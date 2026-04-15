@@ -60,14 +60,20 @@ export const MapComponent = ({
   const hasAutoFitRef = useRef(false);
   const fitKeyRef = useRef('');
   const [layerMode, setLayerMode] = useState('all');
+  const [mapState, setMapState] = useState('');
+
+  const states = useMemo(() => [...new Set((dams || []).map(d => d.state))].sort(), [dams]);
+  const effectiveState = layerMode === 'state'
+    ? (mapState || selectedState || states[0] || '')
+    : '';
 
   const visibleDams = useMemo(() => {
     if (!Array.isArray(dams)) return [];
-    if (layerMode === 'state' && selectedState) {
-      return dams.filter(d => d.state === selectedState);
+    if (layerMode === 'state' && effectiveState) {
+      return dams.filter(d => d.state === effectiveState);
     }
     return dams;
-  }, [dams, layerMode, selectedState]);
+  }, [dams, layerMode, effectiveState]);
 
   useEffect(() => {
     if (!mapContainer.current) return;
@@ -174,7 +180,7 @@ export const MapComponent = ({
       markerByIdRef.current[dam.id] = marker;
     });
 
-    if (layerMode === 'state' && selectedState) {
+    if (layerMode === 'state' && effectiveState) {
       const stateDams = visibleDams;
       if (stateDams.length) {
         const lats = stateDams.map(d => d.latitude);
@@ -193,14 +199,14 @@ export const MapComponent = ({
       }
     }
 
-    const fitKey = `${layerMode}|${selectedState || 'ALL'}|${visibleDams.length}`;
+    const fitKey = `${layerMode}|${effectiveState || 'ALL'}|${visibleDams.length}`;
     if (visibleDams.length && (!hasAutoFitRef.current || fitKeyRef.current !== fitKey)) {
       const group = L.featureGroup(layersRef.current.filter(Boolean));
       map.current.fitBounds(group.getBounds().pad(0.25));
       hasAutoFitRef.current = true;
       fitKeyRef.current = fitKey;
     }
-  }, [visibleDams, onDamSelect, reservoirByDam, layerMode, selectedState, selectedDam]);
+  }, [visibleDams, onDamSelect, reservoirByDam, layerMode, effectiveState, selectedDam]);
 
   useEffect(() => {
     if (!map.current) return;
@@ -235,6 +241,19 @@ export const MapComponent = ({
             Show by State
           </button>
         </div>
+        {layerMode === 'state' && (
+          <div className="mt-2">
+            <select
+              value={effectiveState}
+              onChange={(e) => setMapState(e.target.value)}
+              className="w-full px-2 py-1 rounded border border-gray-300 text-gray-700 bg-white"
+            >
+              {states.map((state) => (
+                <option key={state} value={state}>{state}</option>
+              ))}
+            </select>
+          </div>
+        )}
       </div>
       <div ref={mapContainer} className="w-full h-full rounded-lg" />
     </div>
